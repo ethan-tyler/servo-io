@@ -12,7 +12,7 @@ pub async fn execute(database_url: &str) -> Result<()> {
     // Run migrations
     servo_storage::migrations::run_migrations(storage.pool()).await?;
 
-    tracing::info!("✅ Database initialized successfully");
+    tracing::info!("Database initialized successfully");
 
     Ok(())
 }

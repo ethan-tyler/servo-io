@@ -10,7 +10,7 @@ pub async fn execute(database_url: &str, direction: &str) -> Result<()> {
         "up" => {
             let storage = PostgresStorage::new(database_url).await?;
             servo_storage::migrations::run_migrations(storage.pool()).await?;
-            tracing::info!("✅ Migrations applied successfully");
+            tracing::info!("Migrations applied successfully");
         }
         "down" => {
             // TODO: Implement down migrations

@@ -16,16 +16,16 @@
 
 ## What is Servo?
 
-**Servo** is an open-source, asset-centric data orchestration platform designed for serverless compute environments and multi-tenant SaaS applications. Built with a high-performance Rust core and ergonomic Python SDK, Servo delivers enterprise-grade orchestration features—including comprehensive lineage tracking, observability, retry logic, and versioning—without requiring persistent infrastructure.
+**Servo** is an open-source, asset-centric data orchestration platform designed for serverless compute environments and multi-tenant SaaS applications. Built with a high-performance Rust core and ergonomic Python SDK, Servo delivers enterprise-grade orchestration features, including comprehensive lineage tracking, observability, retry logic, and versioning, without requiring persistent infrastructure.
 
 ### Key Features
 
-- ✅ **Asset-First Orchestration**: Data assets are first-class citizens with automatic lineage tracking
-- ✅ **Serverless-Native**: No persistent schedulers—uses cloud queuing services (Cloud Tasks, SQS, EventBridge)
-- ✅ **Multi-Tenant by Design**: Tenant isolation, cost attribution, and zero noisy-neighbor risk
-- ✅ **Zero Idle Costs**: Scales to $0 when inactive (unlike Airflow/Dagster/Prefect)
-- ✅ **Cloud-Agnostic**: Works across GCP, AWS, Azure with pluggable adapters
-- ✅ **High Performance**: Rust core provides 10-100x performance improvements for critical paths
+- **Asset-first orchestration**: Data assets are first-class citizens with automatic lineage tracking.
+- **Serverless-native**: No persistent schedulers; uses cloud queuing services (Cloud Tasks, SQS, EventBridge).
+- **Multi-tenant by design**: Tenant isolation, cost attribution, and protection against noisy neighbors.
+- **Zero idle costs**: Scales to zero when inactive (unlike Airflow, Dagster, or Prefect).
+- **Cloud-agnostic**: Works across GCP, AWS, and Azure with pluggable adapters.
+- **High performance**: Rust core provides 10-100x performance improvements for critical paths.
 
 ### Quick Start
 
@@ -72,24 +72,24 @@ servo run daily_etl
 
 **Problem**: Modern data teams use serverless compute (Cloud Run, Lambda, ECS) but orchestration tools still require persistent infrastructure with fixed costs.
 
-**Solution**: Servo orchestrates workflows using cloud-native queuing services and stores execution metadata in standard relational databases—no persistent schedulers, no daemons, no fixed costs.
+**Solution**: Servo orchestrates workflows using cloud-native queuing services and stores execution metadata in standard relational databases. No persistent schedulers, no daemons, and no fixed costs.
 
 **Comparison**:
 
 | Feature | Servo | Dagster | Airflow | Step Functions |
 |---------|-------|---------|---------|----------------|
 | Persistent processes | None | Required | Required | None |
-| Asset lineage | ✅ Built-in | ✅ Core | ⚠️ Plugins | ❌ |
-| Multi-tenant (first-class) | ✅ | ⚠️ | ❌ | ⚠️ |
-| Zero idle costs | ✅ | ❌ | ❌ | ✅ |
-| Cloud-agnostic | ✅ | ✅ | ✅ | ❌ |
+| Asset lineage | Built-in | Core | Plugin-based | Not available |
+| Multi-tenant (first-class) | Yes | Partial | No | Partial |
+| Zero idle costs | Yes | No | No | Yes |
+| Cloud-agnostic | Yes | Yes | Yes | No |
 
 ### Architecture
 
 ```
-User Code (Python) → Servo SDK → Rust Core → Cloud Queue → Worker → PostgreSQL
-                                                    ↓
-                                              Cloud Storage
+User Code (Python) -> Servo SDK -> Rust Core -> Cloud Queue -> Worker -> PostgreSQL
+                                                         |
+                                                         -> Cloud Storage
 ```
 
 ### Community
@@ -112,4 +112,4 @@ See [ROADMAP.md](ROADMAP.md) for our development plans.
 
 ---
 
-**Built with ❤️ by the Servo community**
+Built with care by the Servo community.

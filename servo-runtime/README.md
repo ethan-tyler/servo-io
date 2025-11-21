@@ -7,7 +7,7 @@ Execution runtime for Servo workflows, providing state management, retry logic, 
 The `servo-runtime` crate manages the execution lifecycle of Servo workflows:
 
 - **Executor**: Trait for executing workflows on different backends
-- **State Machine**: Manages execution state transitions (pending → running → succeeded/failed)
+- **State Machine**: Manages execution state transitions (pending -> running -> succeeded/failed)
 - **Retry Logic**: Configurable retry policies with exponential backoff
 - **Concurrency Control**: Limits parallel executions to prevent resource exhaustion
 

@@ -1,13 +1,11 @@
 #!/bin/bash
-set -e
+set -euo pipefail
 
-echo "🧪 Running Servo test suite..."
+echo "Running Servo test suite..."
 
-# Export test database URL
-export DATABASE_URL=postgresql://servo:servo@localhost:5432/servo_dev
+export DATABASE_URL=${DATABASE_URL:-postgresql://servo:servo@localhost:5432/servo_dev}
 
-# Rust tests
-echo "📦 Running Rust tests..."
-cargo test --all-features
+echo "Executing Rust tests..."
+cargo test --workspace --all-features
 
-echo "✅ All tests passed!"
+echo "Test suite completed successfully."

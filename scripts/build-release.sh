@@ -1,15 +1,10 @@
 #!/bin/bash
-set -e
+set -euo pipefail
 
-echo "🔨 Building Servo release artifacts..."
+echo "Building Servo release artifacts..."
 
-# Build all crates in release mode
-cargo build --release --all
+cargo build --release --workspace
 
-echo "📦 Building CLI binary..."
-cargo build --release --bin servo
-
-echo "✅ Release build complete!"
-echo ""
+echo "Release build complete."
 echo "Artifacts:"
-echo "  CLI: target/release/servo"
+echo "  CLI binary: target/release/servo"
