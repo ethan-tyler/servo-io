@@ -128,6 +128,7 @@ impl PostgresStorage {
     /// 1. Begins a new transaction
     /// 2. Executes the provided closure with the transaction
     /// 3. Commits on success, rolls back on error
+    #[allow(dead_code)]
     async fn with_transaction<F, T>(&self, f: F) -> Result<T>
     where
         F: for<'c> FnOnce(&'c mut Transaction<'_, Postgres>) -> BoxFuture<'c, Result<T>> + Send,
@@ -168,6 +169,17 @@ impl PostgresStorage {
             ));
         }
         Ok(())
+    }
+
+    /// Validate execution state
+    fn validate_execution_state(state: &str) -> Result<()> {
+        match state {
+            "pending" | "running" | "succeeded" | "failed" | "cancelled" | "timeout" => Ok(()),
+            _ => Err(crate::Error::ValidationError(format!(
+                "Invalid execution state: {}",
+                state
+            ))),
+        }
     }
 
     /// Validate that a string field is not empty
@@ -319,6 +331,7 @@ impl PostgresStorage {
         execution: &ExecutionModel,
         tenant_id: &TenantId,
     ) -> Result<()> {
+        Self::validate_execution_state(&execution.state)?;
         let execution = execution.clone();
         let tenant_str = tenant_id.as_str().to_string();
 
@@ -453,6 +466,7 @@ impl PostgresStorage {
         execution: &ExecutionModel,
         tenant_id: &TenantId,
     ) -> Result<()> {
+        Self::validate_execution_state(&execution.state)?;
         let execution = execution.clone();
 
         self.with_tenant_context(tenant_id, |tx| {
@@ -1128,6 +1142,21 @@ mod tests {
         assert!(PostgresStorage::validate_dependency_type("metadata").is_ok());
         assert!(PostgresStorage::validate_dependency_type("control").is_ok());
         assert!(PostgresStorage::validate_dependency_type("invalid").is_err());
+    }
+
+    #[test]
+    fn test_validate_execution_state() {
+        for state in [
+            "pending",
+            "running",
+            "succeeded",
+            "failed",
+            "cancelled",
+            "timeout",
+        ] {
+            assert!(PostgresStorage::validate_execution_state(state).is_ok());
+        }
+        assert!(PostgresStorage::validate_execution_state("bogus").is_err());
     }
 
     #[tokio::test]

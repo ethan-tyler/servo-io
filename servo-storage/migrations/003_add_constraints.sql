@@ -10,6 +10,11 @@ ALTER TABLE asset_dependencies
     ADD CONSTRAINT asset_dependencies_type_check
     CHECK (dependency_type IN ('data', 'metadata', 'control'));
 
+-- Restrict execution states
+ALTER TABLE executions
+    ADD CONSTRAINT executions_state_check
+    CHECK (state IN ('pending', 'running', 'succeeded', 'failed', 'cancelled', 'timeout'));
+
 -- Enforce monotonic timestamps for assets
 ALTER TABLE assets
     ADD CONSTRAINT assets_updated_after_created
