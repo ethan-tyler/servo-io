@@ -6,10 +6,13 @@ members = [
     "servo-lineage",
     "servo-storage",
     "servo-cloud-gcp",
+    "servo-cli",
+]
+exclude = [
+    # Placeholder/work-in-progress crates not present in this workspace
     "servo-cloud-aws",
     "servo-cloud-azure",
     "servo-python",
-    "servo-cli",
 ]
 
 [workspace.package]

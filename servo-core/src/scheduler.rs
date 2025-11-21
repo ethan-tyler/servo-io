@@ -95,9 +95,7 @@ mod tests {
         let mut scheduler = Scheduler::new();
         let workflow_id = WorkflowId::new();
 
-        assert!(scheduler
-            .schedule(workflow_id, Schedule::Immediate)
-            .is_ok());
+        assert!(scheduler.schedule(workflow_id, Schedule::Immediate).is_ok());
         assert_eq!(scheduler.get_schedules().len(), 1);
     }
 

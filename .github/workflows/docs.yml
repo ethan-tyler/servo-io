@@ -1,0 +1,89 @@
+name: Documentation
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+env:
+  RUST_BACKTRACE: 1
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-docs:
+    name: Build Documentation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Cache Rust dependencies
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-docs-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build documentation
+        run: |
+          cargo +nightly doc --no-deps --all-features --workspace
+        env:
+          RUSTDOCFLAGS: "--cfg docsrs -D warnings"
+
+      - name: Add redirect index.html
+        run: |
+          cat > target/doc/index.html <<EOF
+          <!DOCTYPE html>
+          <html>
+          <head>
+            <meta charset="utf-8">
+            <meta http-equiv="refresh" content="0; url=servo_core/index.html">
+            <title>Servo Documentation</title>
+          </head>
+          <body>
+            <p>Redirecting to <a href="servo_core/index.html">servo_core</a>...</p>
+          </body>
+          </html>
+          EOF
+
+      - name: Upload documentation artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: documentation
+          path: target/doc
+          retention-days: 30
+
+      - name: Deploy to GitHub Pages (main branch only)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./target/doc
+          cname: docs.servo.dev
+          force_orphan: true
+
+  check-docs:
+    name: Check Documentation Links
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Check for broken intra-doc links
+        run: cargo doc --no-deps --all-features --workspace
+        env:
+          RUSTDOCFLAGS: "-D warnings"

@@ -32,10 +32,7 @@ pub struct ExecutionResult {
 #[async_trait]
 pub trait Executor: Send + Sync {
     /// Execute a workflow
-    async fn execute(
-        &self,
-        workflow_id: servo_core::WorkflowId,
-    ) -> Result<ExecutionResult>;
+    async fn execute(&self, workflow_id: servo_core::WorkflowId) -> Result<ExecutionResult>;
 
     /// Cancel a running execution
     async fn cancel(&self, execution_id: ExecutionId) -> Result<()>;
