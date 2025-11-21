@@ -8,6 +8,12 @@ members = [
     "servo-cloud-gcp",
     "servo-cli",
 ]
+exclude = [
+    # Placeholder/work-in-progress crates not present in this workspace
+    "servo-cloud-aws",
+    "servo-cloud-azure",
+    "servo-python",
+]
 
 [workspace.package]
 version = "0.1.0"
