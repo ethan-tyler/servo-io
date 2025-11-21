@@ -1,0 +1,33 @@
+[package]
+name = "servo-lineage"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+description = "Lineage graph operations for Servo"
+
+[dependencies]
+# Graph algorithms
+petgraph = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# UUID
+uuid = { workspace = true }
+
+# Error handling
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+
+# Logging/tracing
+tracing = { workspace = true }
+
+# Internal dependencies
+servo-core = { path = "../servo-core" }
+
+[dev-dependencies]

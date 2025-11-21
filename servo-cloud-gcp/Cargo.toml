@@ -1,0 +1,36 @@
+[package]
+name = "servo-cloud-gcp"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+description = "GCP adapter for Servo (Cloud Tasks, Cloud Run)"
+
+[dependencies]
+# Async runtime
+tokio = { workspace = true }
+async-trait = { workspace = true }
+
+# HTTP client
+reqwest = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Error handling
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+
+# Logging/tracing
+tracing = { workspace = true }
+
+# Internal dependencies
+servo-core = { path = "../servo-core" }
+servo-runtime = { path = "../servo-runtime" }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util", "macros"] }

@@ -1,0 +1,36 @@
+//! # Servo Core
+//!
+//! Core orchestration engine for Servo, providing workflow compilation,
+//! asset management, and execution scheduling.
+
+pub mod asset;
+pub mod compiler;
+pub mod registry;
+pub mod scheduler;
+pub mod workflow;
+
+// Re-export commonly used types
+pub use asset::{Asset, AssetDependency, AssetId, AssetMetadata};
+pub use compiler::{CompileError, WorkflowCompiler};
+pub use registry::{AssetRegistry, RegistryError};
+pub use scheduler::{ScheduleError, Scheduler};
+pub use workflow::{Workflow, WorkflowId, WorkflowMetadata};
+
+/// Result type for Servo core operations
+pub type Result<T> = std::result::Result<T, Error>;
+
+/// Error types for Servo core operations
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("Compilation error: {0}")]
+    Compile(#[from] CompileError),
+
+    #[error("Registry error: {0}")]
+    Registry(#[from] RegistryError),
+
+    #[error("Schedule error: {0}")]
+    Schedule(#[from] ScheduleError),
+
+    #[error("Internal error: {0}")]
+    Internal(String),
+}

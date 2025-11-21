@@ -1,0 +1,20 @@
+# Default owners for everything in the repo
+* @servo-team/core-maintainers
+
+# Rust core
+/servo-core/ @servo-team/rust-maintainers
+/servo-runtime/ @servo-team/rust-maintainers
+/servo-lineage/ @servo-team/rust-maintainers
+/servo-storage/ @servo-team/rust-maintainers
+
+# Cloud adapters
+/servo-cloud-gcp/ @servo-team/gcp-maintainers
+
+# CLI
+/servo-cli/ @servo-team/core-maintainers
+
+# Documentation
+/docs/ @servo-team/docs-maintainers
+
+# GitHub
+/.github/ @servo-team/core-maintainers

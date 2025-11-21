@@ -1,0 +1,75 @@
+[workspace]
+resolver = "2"
+members = [
+    "servo-core",
+    "servo-runtime",
+    "servo-lineage",
+    "servo-storage",
+    "servo-cloud-gcp",
+    "servo-cloud-aws",
+    "servo-cloud-azure",
+    "servo-python",
+    "servo-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["Servo Team <team@servo.dev>"]
+license = "Apache-2.0"
+repository = "https://github.com/servo-orchestration/servo"
+homepage = "https://servo.dev"
+documentation = "https://docs.servo.dev"
+
+[workspace.dependencies]
+# Async runtime
+tokio = { version = "1.35", features = ["full"] }
+
+# Database
+sqlx = { version = "0.7", features = ["runtime-tokio-rustls", "postgres", "uuid", "chrono", "json"] }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Graph algorithms
+petgraph = "0.6"
+
+# Python bindings
+pyo3 = { version = "0.20", features = ["extension-module"] }
+
+# CLI
+clap = { version = "4.4", features = ["derive", "env"] }
+
+# Logging/tracing
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# Date/time
+chrono = { version = "0.4", features = ["serde"] }
+
+# UUID
+uuid = { version = "1.6", features = ["v4", "serde"] }
+
+# Error handling
+anyhow = "1.0"
+thiserror = "1.0"
+
+# Async
+async-trait = "0.1"
+futures = "0.3"
+
+# HTTP client
+reqwest = { version = "0.11", features = ["json", "rustls-tls"] }
+
+# Testing
+mockall = "0.12"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true
+
+[profile.bench]
+inherits = "release"
