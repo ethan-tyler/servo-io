@@ -46,6 +46,13 @@ This document outlines the planned features and milestones for Servo development
 - <10 minute deploy-to-first-execution
 - <100ms cold start latency
 
+### Readiness Criteria (Phase 1)
+- Vertical slice working: Python SDK decorators -> compiler -> metadata store -> Cloud Tasks enqueue -> Cloud Run worker -> lineage record -> CLI status.
+- Storage safety: RLS enforced for tenants, partitions/version columns in schema, and up-only migrations documented.
+- Reliability: deterministic retries with idempotency keys and timeouts in runtime.
+- Observability: structured tracing with execution_id/tenant_id, basic metrics hooks, and actionable errors in CLI.
+- Tests and CI: unit tests for compiler/runtime/storage, integration tests against Postgres, and lint/format gates (Rust + Python).
+
 ---
 
 ## Phase 2: Production-Ready (Months 4-6) - Q2 2025

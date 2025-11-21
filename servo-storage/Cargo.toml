@@ -13,6 +13,7 @@ description = "Metadata storage for Servo using PostgreSQL"
 # Async runtime
 tokio = { workspace = true }
 async-trait = { workspace = true }
+futures = { workspace = true }
 
 # Database
 sqlx = { workspace = true }

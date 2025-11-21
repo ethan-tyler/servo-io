@@ -36,4 +36,13 @@ pub enum Error {
 
     #[error("Internal error: {0}")]
     Internal(String),
+
+    #[error("Validation error: {0}")]
+    ValidationError(String),
+
+    #[error("Connection pool exhausted: {0}")]
+    PoolExhausted(String),
+
+    #[error("Connection failed: {0}")]
+    ConnectionFailed(String),
 }

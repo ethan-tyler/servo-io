@@ -56,14 +56,14 @@ impl RetryPolicy {
             RetryStrategy::None => Duration::from_secs(0),
             RetryStrategy::Fixed => self.initial_delay,
             RetryStrategy::Exponential => {
-                let delay = self.initial_delay.as_secs_f64()
-                    * self.backoff_multiplier.powi(attempt as i32);
+                let delay =
+                    self.initial_delay.as_secs_f64() * self.backoff_multiplier.powi(attempt as i32);
                 Duration::from_secs_f64(delay.min(self.max_delay.as_secs_f64()))
             }
             RetryStrategy::ExponentialWithJitter => {
                 // TODO: Add jitter to exponential backoff
-                let delay = self.initial_delay.as_secs_f64()
-                    * self.backoff_multiplier.powi(attempt as i32);
+                let delay =
+                    self.initial_delay.as_secs_f64() * self.backoff_multiplier.powi(attempt as i32);
                 Duration::from_secs_f64(delay.min(self.max_delay.as_secs_f64()))
             }
         }

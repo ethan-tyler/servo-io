@@ -89,6 +89,25 @@ impl Workflow {
     /// Add an asset to the workflow
     pub fn add_asset(&mut self, asset_id: AssetId) {
         self.assets.push(asset_id);
+        self.touch();
+    }
+
+    /// Bump workflow version (for updated definitions)
+    pub fn bump_version(&mut self) {
+        self.metadata.version += 1;
+        self.touch();
+    }
+
+    /// Set a specific version (e.g., during imports)
+    pub fn with_version(mut self, version: u32) -> Self {
+        self.metadata.version = version;
+        self.touch();
+        self
+    }
+
+    /// Update the updated_at timestamp
+    pub fn touch(&mut self) {
+        self.metadata.updated_at = Utc::now();
     }
 }
 
@@ -113,5 +132,22 @@ mod tests {
 
         assert_eq!(workflow.assets.len(), 1);
         assert_eq!(workflow.assets[0], asset_id);
+    }
+
+    #[test]
+    fn test_bump_version_updates_metadata() {
+        let mut workflow = Workflow::new("versioned");
+        let original_updated_at = workflow.metadata.updated_at;
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        workflow.bump_version();
+
+        assert_eq!(workflow.metadata.version, 2);
+        assert!(workflow.metadata.updated_at > original_updated_at);
+    }
+
+    #[test]
+    fn test_with_version_sets_version() {
+        let workflow = Workflow::new("imported").with_version(42);
+        assert_eq!(workflow.metadata.version, 42);
     }
 }

@@ -1,0 +1,78 @@
+# Labeler configuration for automatic PR labeling
+# https://github.com/actions/labeler
+
+# Component labels
+'component: core':
+  - changed-files:
+    - any-glob-to-any-file: 'servo-core/**/*'
+
+'component: runtime':
+  - changed-files:
+    - any-glob-to-any-file: 'servo-runtime/**/*'
+
+'component: lineage':
+  - changed-files:
+    - any-glob-to-any-file: 'servo-lineage/**/*'
+
+'component: storage':
+  - changed-files:
+    - any-glob-to-any-file: 'servo-storage/**/*'
+
+'component: cloud-gcp':
+  - changed-files:
+    - any-glob-to-any-file: 'servo-cloud-gcp/**/*'
+
+'component: cli':
+  - changed-files:
+    - any-glob-to-any-file: 'servo-cli/**/*'
+
+# Type labels
+'type: documentation':
+  - changed-files:
+    - any-glob-to-any-file:
+      - '**/*.md'
+      - 'docs/**/*'
+
+'type: ci/cd':
+  - changed-files:
+    - any-glob-to-any-file:
+      - '.github/**/*'
+      - '.gitlab-ci.yml'
+      - 'Dockerfile'
+      - '.dockerignore'
+
+'type: dependencies':
+  - changed-files:
+    - any-glob-to-any-file:
+      - '**/Cargo.toml'
+      - 'Cargo.lock'
+
+'type: tests':
+  - changed-files:
+    - any-glob-to-any-file:
+      - '**/tests/**/*'
+      - '**/*_test.rs'
+      - '**/test_*.rs'
+
+'type: security':
+  - changed-files:
+    - any-glob-to-any-file:
+      - 'SECURITY.md'
+      - 'deny.toml'
+
+# Database related
+'database':
+  - changed-files:
+    - any-glob-to-any-file:
+      - '**/migrations/**/*'
+      - 'servo-storage/**/*'
+
+# Configuration changes
+'config':
+  - changed-files:
+    - any-glob-to-any-file:
+      - '*.toml'
+      - '*.yml'
+      - '*.yaml'
+      - '.editorconfig'
+      - '.gitignore'

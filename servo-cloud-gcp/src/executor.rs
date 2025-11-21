@@ -1,10 +1,10 @@
 //! Cloud Run executor implementation
 
-use crate::Result;
 use async_trait::async_trait;
 use servo_runtime::{ExecutionResult, Executor};
 
 /// Cloud Run executor for running workflows
+#[allow(dead_code)]
 pub struct CloudRunExecutor {
     project_id: String,
     region: String,

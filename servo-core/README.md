@@ -31,7 +31,7 @@ workflow.add_asset(asset.id);
 
 // Compile the workflow
 let mut compiler = WorkflowCompiler::new();
-compiler.register_asset(asset);
+compiler.register_asset(asset)?;
 let plan = compiler.compile(&workflow)?;
 ```
 

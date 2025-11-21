@@ -80,9 +80,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Setup logging
     let log_level = if cli.verbose { "debug" } else { "info" };
-    tracing_subscriber::fmt()
-        .with_env_filter(log_level)
-        .init();
+    tracing_subscriber::fmt().with_env_filter(log_level).init();
 
     // Execute command
     match cli.command {

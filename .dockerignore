@@ -1,0 +1,52 @@
+# Git
+.git
+.github
+.gitignore
+
+# Documentation
+*.md
+docs/
+*.rtf
+
+# Target directory
+target/
+**/target/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# CI/CD
+.gitlab-ci.yml
+
+# Testing
+.coverage
+htmlcov/
+
+# Build artifacts
+*.so
+*.dylib
+*.dll
+*.exe
+
+# Dependencies
+node_modules/
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.bak
+*.log
+
+# Claude
+.claude/

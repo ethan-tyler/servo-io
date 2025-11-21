@@ -10,10 +10,13 @@ pub mod scheduler;
 pub mod workflow;
 
 // Re-export commonly used types
-pub use asset::{Asset, AssetDependency, AssetId, AssetMetadata};
-pub use compiler::{CompileError, WorkflowCompiler};
+pub use asset::{
+    Asset, AssetBuilder, AssetDependency, AssetId, AssetMetadata, DependencyType, PartitionConfig,
+    PartitionType, TimeGranularity,
+};
+pub use compiler::{CompileError, ExecutionPlan, WorkflowCompiler};
 pub use registry::{AssetRegistry, RegistryError};
-pub use scheduler::{ScheduleError, Scheduler};
+pub use scheduler::{Schedule, ScheduleError, Scheduler};
 pub use workflow::{Workflow, WorkflowId, WorkflowMetadata};
 
 /// Result type for Servo core operations
