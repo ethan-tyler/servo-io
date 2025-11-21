@@ -1,80 +1,170 @@
 # servo-storage
 
-Metadata storage for Servo using PostgreSQL with row-level security for multi-tenancy.
+PostgreSQL-based metadata storage layer for Servo with multi-tenant isolation.
 
-## Overview
+## Features
 
-The `servo-storage` crate provides PostgreSQL-backed persistence for Servo metadata:
-
-- **Models**: Database models for assets, workflows, and executions
-- **Migrations**: SQL migrations for schema management
-- **Tenant Support**: Row-level security for multi-tenant isolation
-- **Lineage**: Asset dependency tracking
-
-## Usage
-
-```rust
-use servo_storage::{PostgresStorage, models::AssetModel, TenantId};
-
-// Connect to database
-let storage = PostgresStorage::new("postgresql://localhost/servo").await?;
-
-// Run migrations
-servo_storage::migrations::run_migrations(storage.pool()).await?;
-
-// Create an asset
-let asset = AssetModel {
-    id: Uuid::new_v4(),
-    name: "customer_data".to_string(),
-    asset_type: "table".to_string(),
-    // ...
-};
-
-let tenant = TenantId::new("tenant_123");
-storage.create_asset(&asset, Some(&tenant)).await?;
-
-// Retrieve asset
-let retrieved = storage.get_asset(asset.id, Some(&tenant)).await?;
-```
+- **Full CRUD operations** for assets, workflows, and executions
+- **Pagination support** for list operations
+- **Multi-tenant isolation** with row-level security (RLS)
+- **Asset dependency tracking** for lineage and provenance
+- **Connection pooling** with configurable retry logic
+- **Async/await** with tokio and sqlx
 
 ## Database Schema
 
-The initial migration creates:
+The storage layer uses PostgreSQL with the following tables:
 
-- `assets` - Data assets (tables, files, models)
-- `workflows` - Workflow definitions
-- `executions` - Execution runs
-- `asset_dependencies` - Lineage relationships
+- `assets` - Asset metadata with partition configuration
+- `workflows` - Workflow definitions with versioning
+- `executions` - Workflow execution state
+- `asset_dependencies` - Asset lineage relationships
 
-All tables include row-level security for multi-tenant isolation.
+All tables have row-level security (RLS) enabled for tenant isolation.
 
-## Migrations
+## Running Integration Tests
 
-Migrations are managed using `sqlx-cli`:
+Integration tests require a PostgreSQL database. Set up the test database:
 
 ```bash
-# Install sqlx-cli
-cargo install sqlx-cli --features postgres
+# 1. Start PostgreSQL (if using Docker)
+docker run -d \
+  --name servo-postgres-test \
+  -e POSTGRES_PASSWORD=servo \
+  -e POSTGRES_USER=servo \
+  -e POSTGRES_DB=servo_test \
+  -p 5433:5432 \
+  postgres:15
 
-# Run migrations
-sqlx migrate run --database-url postgresql://localhost/servo
+# 2. Set the test database URL (optional, defaults shown)
+export TEST_DATABASE_URL=postgresql://servo:servo@localhost:5433/servo_test
 
-# Create new migration
-sqlx migrate add migration_name
+# 3. Run integration tests
+cargo test --package servo-storage -- --ignored
+
+# Run specific test
+cargo test --package servo-storage test_tenant_isolation -- --ignored
+```
+
+## Usage Example
+
+```rust
+use servo_storage::{PostgresStorage, TenantId, AssetModel};
+use chrono::Utc;
+use uuid::Uuid;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Connect to database
+    let storage = PostgresStorage::new("postgresql://servo:servo@localhost/servo_dev").await?;
+
+    // Create an asset with tenant isolation
+    let tenant = TenantId::new("tenant_123");
+    let asset = AssetModel {
+        id: Uuid::new_v4(),
+        name: "customer_events".to_string(),
+        description: Some("Daily customer event logs".to_string()),
+        asset_type: "table".to_string(),
+        owner: Some("data_team".to_string()),
+        tags: sqlx::types::Json(vec!["pii".to_string(), "daily".to_string()]),
+        tenant_id: Some("tenant_123".to_string()),
+        created_at: Utc::now(),
+        updated_at: Utc::now(),
+    };
+
+    storage.create_asset(&asset, Some(&tenant)).await?;
+
+    // List assets for tenant with pagination
+    let assets = storage.list_assets(Some(&tenant), 10, 0).await?;
+    println!("Found {} assets for tenant", assets.len());
+
+    // Get asset by ID
+    let retrieved = storage.get_asset(asset.id, Some(&tenant)).await?;
+    println!("Asset: {}", retrieved.name);
+
+    Ok(())
+}
+```
+
+## Configuration
+
+Connection pool can be configured with custom settings:
+
+```rust
+let storage = PostgresStorage::with_config(
+    "postgresql://servo:servo@localhost/servo_dev",
+    10,  // max_connections
+    30,  // connection_timeout_secs
+).await?;
+```
+
+## Multi-Tenancy
+
+All operations accept an optional `TenantId` parameter. When provided:
+
+- Data is automatically filtered by tenant
+- Cross-tenant access is prevented by RLS policies
+- NULL tenant_id represents global/system data
+
+```rust
+let tenant1 = TenantId::new("tenant_1");
+let tenant2 = TenantId::new("tenant_2");
+
+// Tenant 1 can only see their data
+let assets = storage.list_assets(Some(&tenant1), 10, 0).await?;
+
+// Trying to access tenant 2's data will fail
+let result = storage.get_asset(tenant2_asset_id, Some(&tenant1)).await;
+assert!(result.is_err());
+```
+
+## Asset Dependencies & Lineage
+
+Track dependencies between assets for lineage and provenance:
+
+```rust
+// Create dependency relationship
+storage.create_asset_dependency(
+    upstream_asset_id,
+    downstream_asset_id,
+    "data",  // dependency type: "data", "metadata", or "control"
+).await?;
+
+// Get full lineage graph
+let lineage = storage.get_asset_lineage(asset_id, 10).await?;  // max depth 10
 ```
 
 ## Testing
 
-```bash
-# Set up test database
-export DATABASE_URL=postgresql://localhost/servo_test
-sqlx database create
-sqlx migrate run
+Unit tests (no database required):
 
-# Run tests
-cargo test -p servo-storage
+```bash
+cargo test --package servo-storage --lib
 ```
 
-## Documentation
+Integration tests (requires PostgreSQL):
 
-For more details, see the [main Servo documentation](https://docs.servo.dev).
+```bash
+cargo test --package servo-storage -- --ignored
+```
+
+## Migrations
+
+Migrations are managed with sqlx:
+
+```bash
+# Create new migration
+sqlx migrate add <name>
+
+# Run migrations
+sqlx migrate run --database-url postgresql://servo:servo@localhost/servo_dev
+```
+
+Or programmatically:
+
+```rust
+use servo_storage::migrations::run_migrations;
+
+let pool = storage.pool();
+run_migrations(pool).await?;
+```

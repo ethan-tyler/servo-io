@@ -1,0 +1,16 @@
+# GitHub Sponsors configuration
+# https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/displaying-a-sponsor-button-in-your-repository
+
+# GitHub Sponsors
+github: # [servo-team] # Uncomment and add GitHub username(s)
+
+# Open Collective
+open_collective: # servo # Uncomment and add Open Collective slug
+
+# Patreon
+patreon: # servo # Uncomment and add Patreon username
+
+# Custom sponsorship links
+custom:
+  # - "https://servo.dev/sponsor"
+  # - "https://opencollective.com/servo"

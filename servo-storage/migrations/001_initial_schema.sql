@@ -1,4 +1,5 @@
 -- Initial schema for Servo metadata
+CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
 -- Assets table
 CREATE TABLE IF NOT EXISTS assets (
@@ -75,7 +76,28 @@ ALTER TABLE assets ENABLE ROW LEVEL SECURITY;
 ALTER TABLE workflows ENABLE ROW LEVEL SECURITY;
 ALTER TABLE executions ENABLE ROW LEVEL SECURITY;
 
--- RLS policies (to be configured per deployment)
--- Example policy for assets:
--- CREATE POLICY tenant_isolation ON assets
---     USING (tenant_id = current_setting('app.current_tenant')::VARCHAR);
+-- Enforce tenant isolation. Access is granted only when the session sets
+-- app.current_tenant, or when the row is global (tenant_id IS NULL).
+-- NOTE: The application must set `SET LOCAL app.current_tenant = '<tenant>';`
+-- before issuing queries.
+CREATE POLICY assets_tenant_isolation ON assets
+    USING (
+        tenant_id IS NULL
+        OR tenant_id = current_setting('app.current_tenant', true)
+    );
+
+CREATE POLICY workflows_tenant_isolation ON workflows
+    USING (
+        tenant_id IS NULL
+        OR tenant_id = current_setting('app.current_tenant', true)
+    );
+
+CREATE POLICY executions_tenant_isolation ON executions
+    USING (
+        tenant_id IS NULL
+        OR tenant_id = current_setting('app.current_tenant', true)
+    );
+
+ALTER TABLE assets FORCE ROW LEVEL SECURITY;
+ALTER TABLE workflows FORCE ROW LEVEL SECURITY;
+ALTER TABLE executions FORCE ROW LEVEL SECURITY;

@@ -6,9 +6,6 @@ members = [
     "servo-lineage",
     "servo-storage",
     "servo-cloud-gcp",
-    "servo-cloud-aws",
-    "servo-cloud-azure",
-    "servo-python",
     "servo-cli",
 ]
 

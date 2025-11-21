@@ -1,0 +1,73 @@
+name: Stale Issues & PRs
+
+on:
+  schedule:
+    # Run daily at 01:00 UTC
+    - cron: '0 1 * * *'
+  workflow_dispatch:
+
+permissions:
+  issues: write
+  pull-requests: write
+
+jobs:
+  stale:
+    name: Mark stale issues and PRs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/stale@v9
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+          # Issue configuration
+          days-before-issue-stale: 60
+          days-before-issue-close: 14
+          stale-issue-label: 'status: stale'
+          exempt-issue-labels: 'priority: high,priority: critical,status: blocked,good first issue'
+          stale-issue-message: |
+            This issue has been automatically marked as stale because it has not had any activity for 60 days.
+
+            If this issue is still relevant, please:
+            - Comment on this issue to keep it open
+            - Update the issue with new information
+            - Create a PR to address the issue
+
+            This issue will be closed in 14 days if no further activity occurs.
+
+            Thank you for your contributions to Servo!
+          close-issue-message: |
+            This issue has been automatically closed due to inactivity.
+
+            If you believe this issue is still relevant, please reopen it with updated information or create a new issue referencing this one.
+          close-issue-reason: not_planned
+
+          # Pull Request configuration
+          days-before-pr-stale: 30
+          days-before-pr-close: 14
+          stale-pr-label: 'status: stale'
+          exempt-pr-labels: 'priority: high,priority: critical,status: blocked,work in progress'
+          exempt-draft-pr: true
+          stale-pr-message: |
+            This pull request has been automatically marked as stale because it has not had any activity for 30 days.
+
+            To keep this PR open, please:
+            - Rebase your branch on the latest main
+            - Respond to any review comments
+            - Update the PR description if the scope has changed
+
+            This PR will be closed in 14 days if no further activity occurs.
+
+            Thank you for your contribution to Servo!
+          close-pr-message: |
+            This pull request has been automatically closed due to inactivity.
+
+            If you'd like to continue working on this, please reopen the PR or create a new one.
+            Make sure to:
+            - Rebase on the latest main branch
+            - Address any review comments
+            - Update the PR description
+
+          # General configuration
+          operations-per-run: 100
+          ascending: true
+          exempt-all-milestones: false

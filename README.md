@@ -5,11 +5,15 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/servo-orchestration/servo/actions"><img src="https://github.com/servo-orchestration/servo/workflows/CI/badge.svg" alt="CI Status"></a>
+  <a href="https://github.com/ethan-tyler/servo-io/actions"><img src="https://github.com/ethan-tyler/servo-io/workflows/CI/badge.svg" alt="CI Status"></a>
+  <a href="https://github.com/ethan-tyler/servo-io/actions/workflows/coverage.yml"><img src="https://codecov.io/gh/ethan-tyler/servo-io/branch/main/graph/badge.svg" alt="Code Coverage"></a>
+  <a href="https://github.com/ethan-tyler/servo-io/actions/workflows/deny.yml"><img src="https://github.com/ethan-tyler/servo-io/workflows/License%20%26%20Security%20Check/badge.svg" alt="Security"></a>
   <a href="https://crates.io/crates/servo-core"><img src="https://img.shields.io/crates/v/servo-core.svg" alt="Crates.io"></a>
   <a href="https://pypi.org/project/servo-orchestration/"><img src="https://img.shields.io/pypi/v/servo-orchestration.svg" alt="PyPI"></a>
   <a href="https://docs.servo.dev"><img src="https://img.shields.io/badge/docs-latest-blue.svg" alt="Documentation"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-blue.svg" alt="License"></a>
+  <a href="https://github.com/ethan-tyler/servo-io/releases"><img src="https://img.shields.io/github/v/release/ethan-tyler/servo-io?include_prereleases" alt="GitHub Release"></a>
+  <a href="https://github.com/ethan-tyler/servo-io/blob/main/.github/CONTRIBUTING.md"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen.svg" alt="PRs Welcome"></a>
 </p>
 
 ---
