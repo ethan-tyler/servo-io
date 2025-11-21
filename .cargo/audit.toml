@@ -11,5 +11,5 @@ ignore = [
     "RUSTSEC-2024-0363",
 ]
 
-# Warn on unmaintained crates instead of failing
-unmaintained = "warn"
+# Show informational warnings but don't fail on them
+informational_warnings = ["unmaintained"]
