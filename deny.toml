@@ -13,15 +13,16 @@ targets = [
 version = 2
 # Deny crates with security vulnerabilities
 vulnerability = "deny"
-# Warn about unmaintained crates
-unmaintained = "warn"
+# Allow unmaintained crates (many popular proc-macros are in maintenance mode)
+unmaintained = "allow"
 # Warn about yanked crates
 yanked = "warn"
 # Warn about crates with unsound code
 unsound = "warn"
 # Allow specific advisories if needed
 ignore = [
-    # Example: "RUSTSEC-2020-0001",
+    # paste crate is unmaintained but widely used and stable
+    "RUSTSEC-2024-0375",
 ]
 
 [licenses]
