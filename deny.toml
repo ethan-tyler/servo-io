@@ -21,7 +21,11 @@ yanked = "warn"
 unsound = "warn"
 # Allow specific advisories if needed
 ignore = [
-    # Add specific advisory IDs to ignore here if needed
+    # paste crate is unmaintained but stable and widely used
+    "RUSTSEC-2024-0436",
+    # TODO: Upgrade sqlx to 0.8.x to fix this vulnerability
+    # Binary Protocol Misinterpretation in sqlx 0.7.4
+    "RUSTSEC-2024-0363",
 ]
 
 [licenses]
