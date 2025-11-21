@@ -21,8 +21,7 @@ yanked = "warn"
 unsound = "warn"
 # Allow specific advisories if needed
 ignore = [
-    # paste crate is unmaintained but widely used and stable
-    "RUSTSEC-2024-0375",
+    # Add specific advisory IDs to ignore here if needed
 ]
 
 [licenses]
