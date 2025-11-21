@@ -1105,6 +1105,60 @@ impl PostgresStorage {
     }
 }
 
+fn map_db_error(err: sqlx::Error) -> crate::Error {
+    // Map connection-related errors
+    match &err {
+        sqlx::Error::PoolTimedOut => {
+            return crate::Error::PoolExhausted("Connection pool timed out".to_string());
+        }
+        sqlx::Error::PoolClosed => {
+            return crate::Error::ConnectionFailed("Connection pool closed".to_string());
+        }
+        _ => {}
+    }
+
+    // Map PostgreSQL-specific errors
+    if let sqlx::Error::Database(db_err) = &err {
+        if let Some(code) = db_err.code().as_deref() {
+            match code {
+                // unique_violation - duplicate key
+                "23505" => {
+                    return crate::Error::AlreadyExists(db_err.message().to_string());
+                }
+                // foreign_key_violation - referenced record doesn't exist
+                "23503" => {
+                    return crate::Error::NotFound(db_err.message().to_string());
+                }
+                // not_null_violation - required field is null
+                "23502" => {
+                    return crate::Error::ValidationError(format!(
+                        "Required field cannot be null: {}",
+                        db_err.message()
+                    ));
+                }
+                // check_violation - CHECK constraint failed
+                "23514" => {
+                    return crate::Error::ValidationError(format!(
+                        "Constraint violation: {}",
+                        db_err.message()
+                    ));
+                }
+                // too_many_connections - connection pool exhausted
+                "53300" => {
+                    return crate::Error::PoolExhausted(db_err.message().to_string());
+                }
+                // connection_failure - database connection failed
+                "08006" | "08001" | "08003" | "08004" => {
+                    return crate::Error::ConnectionFailed(db_err.message().to_string());
+                }
+                _ => {}
+            }
+        }
+    }
+
+    crate::Error::Database(err)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1768,58 +1822,4 @@ mod tests {
 
         cleanup_test_db(&storage).await.unwrap();
     }
-}
-
-fn map_db_error(err: sqlx::Error) -> crate::Error {
-    // Map connection-related errors
-    match &err {
-        sqlx::Error::PoolTimedOut => {
-            return crate::Error::PoolExhausted("Connection pool timed out".to_string());
-        }
-        sqlx::Error::PoolClosed => {
-            return crate::Error::ConnectionFailed("Connection pool closed".to_string());
-        }
-        _ => {}
-    }
-
-    // Map PostgreSQL-specific errors
-    if let sqlx::Error::Database(db_err) = &err {
-        if let Some(code) = db_err.code().as_deref() {
-            match code {
-                // unique_violation - duplicate key
-                "23505" => {
-                    return crate::Error::AlreadyExists(db_err.message().to_string());
-                }
-                // foreign_key_violation - referenced record doesn't exist
-                "23503" => {
-                    return crate::Error::NotFound(db_err.message().to_string());
-                }
-                // not_null_violation - required field is null
-                "23502" => {
-                    return crate::Error::ValidationError(format!(
-                        "Required field cannot be null: {}",
-                        db_err.message()
-                    ));
-                }
-                // check_violation - CHECK constraint failed
-                "23514" => {
-                    return crate::Error::ValidationError(format!(
-                        "Constraint violation: {}",
-                        db_err.message()
-                    ));
-                }
-                // too_many_connections - connection pool exhausted
-                "53300" => {
-                    return crate::Error::PoolExhausted(db_err.message().to_string());
-                }
-                // connection_failure - database connection failed
-                "08006" | "08001" | "08003" | "08004" => {
-                    return crate::Error::ConnectionFailed(db_err.message().to_string());
-                }
-                _ => {}
-            }
-        }
-    }
-
-    crate::Error::Database(err)
 }
