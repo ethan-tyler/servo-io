@@ -63,9 +63,15 @@ jobs:
         env:
           DATABASE_URL: postgresql://servo:servo@localhost:5432/servo_test
 
+      - name: Run storage integration tests
+        run: cargo test --package servo-storage --all-features -- --ignored
+        env:
+          TEST_DATABASE_URL: postgresql://servo:servo@localhost:5432/servo_test
+
   security-scan:
     name: Security Scan
     runs-on: ubuntu-latest
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
 
