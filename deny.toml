@@ -23,6 +23,7 @@ unsound = "warn"
 ignore = [
     # paste crate is unmaintained but stable and widely used
     "RUSTSEC-2024-0436",
+    "RUSTSEC-2024-0375",
     # TODO: Upgrade sqlx to 0.8.x to fix this vulnerability
     # Binary Protocol Misinterpretation in sqlx 0.7.4
     "RUSTSEC-2024-0363",
