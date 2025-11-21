@@ -42,7 +42,7 @@ jobs:
 
       - name: Upload advisory report
         if: failure() && matrix.checks == 'advisories'
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: advisory-report
           path: target/deny-*.txt
