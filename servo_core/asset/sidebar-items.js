@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["DependencyType","PartitionType","TimeGranularity"],"struct":["Asset","AssetBuilder","AssetDependency","AssetId","AssetMetadata","PartitionConfig"]};

@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["Error"],"mod":["migrations","models","postgres","tenant"],"type":["Result"]};
