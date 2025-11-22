@@ -1176,7 +1176,21 @@ mod tests {
         let db_url = get_test_database_url();
         let storage = PostgresStorage::new(&db_url).await?;
 
-        // Run migrations
+        // Drop all tables to ensure clean state (important for CI where DB persists across test runs)
+        sqlx::query("DROP SCHEMA public CASCADE")
+            .execute(storage.pool())
+            .await?;
+
+        sqlx::query("CREATE SCHEMA public")
+            .execute(storage.pool())
+            .await?;
+
+        // Grant permissions on the schema
+        sqlx::query("GRANT ALL ON SCHEMA public TO PUBLIC")
+            .execute(storage.pool())
+            .await?;
+
+        // Run migrations fresh
         crate::migrations::run_migrations(storage.pool()).await?;
 
         Ok(storage)
