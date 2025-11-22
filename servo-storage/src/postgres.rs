@@ -1076,7 +1076,11 @@ impl PostgresStorage {
             // Add upstream dependencies to lineage
             for dep in upstream {
                 // Track unique dependencies by (upstream, downstream, type)
-                let dep_key = (dep.upstream_asset_id, dep.downstream_asset_id, dep.dependency_type.clone());
+                let dep_key = (
+                    dep.upstream_asset_id,
+                    dep.downstream_asset_id,
+                    dep.dependency_type.clone(),
+                );
                 if visited_deps.insert(dep_key) {
                     lineage.push(dep.clone());
                 }
@@ -1091,7 +1095,11 @@ impl PostgresStorage {
             // Add downstream dependencies to lineage
             for dep in downstream {
                 // Track unique dependencies by (upstream, downstream, type)
-                let dep_key = (dep.upstream_asset_id, dep.downstream_asset_id, dep.dependency_type.clone());
+                let dep_key = (
+                    dep.upstream_asset_id,
+                    dep.downstream_asset_id,
+                    dep.dependency_type.clone(),
+                );
                 if visited_deps.insert(dep_key) {
                     lineage.push(dep.clone());
                 }
