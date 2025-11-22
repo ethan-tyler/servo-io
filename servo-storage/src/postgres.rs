@@ -1311,7 +1311,6 @@ mod tests {
         assert_eq!(retrieved.id, asset.id);
         assert_eq!(retrieved.name, asset.name);
         assert_eq!(retrieved.description, asset.description);
-
     }
 
     #[tokio::test]
@@ -1356,7 +1355,6 @@ mod tests {
             retrieved.description,
             Some("Updated description".to_string())
         );
-
     }
 
     #[tokio::test]
@@ -1392,7 +1390,6 @@ mod tests {
         let result = storage.get_asset(asset.id, &tenant).await;
 
         assert!(result.is_err());
-
     }
 
     #[tokio::test]
@@ -1442,7 +1439,6 @@ mod tests {
             .expect("Failed to count assets");
 
         assert_eq!(count, 5);
-
     }
 
     #[tokio::test]
@@ -1511,7 +1507,6 @@ mod tests {
         let result = storage.get_asset(asset2.id, &tenant1).await;
 
         assert!(result.is_err());
-
     }
 
     #[tokio::test]
@@ -1582,7 +1577,6 @@ mod tests {
 
         assert_eq!(downstream_of_upstream.len(), 1);
         assert_eq!(downstream_of_upstream[0].downstream_asset_id, downstream.id);
-
     }
 
     #[tokio::test]
@@ -1651,7 +1645,6 @@ mod tests {
             .expect("Failed to get lineage");
 
         assert_eq!(lineage.len(), 2);
-
     }
 
     #[tokio::test]
@@ -1692,7 +1685,6 @@ mod tests {
             .expect("Failed to list workflows");
 
         assert_eq!(workflows.len(), 1);
-
     }
 
     #[tokio::test]
@@ -1751,7 +1743,6 @@ mod tests {
             .expect("Failed to list executions");
 
         assert_eq!(executions.len(), 1);
-
     }
 
     #[tokio::test]
@@ -1869,6 +1860,5 @@ mod tests {
             .expect("Tenant2 should be able to access their own asset");
 
         assert_eq!(asset2_valid.id, asset2.id);
-
     }
 }
