@@ -1165,37 +1165,45 @@ mod tests {
     use chrono::Utc;
     use sqlx::types::Json;
 
-    /// Get test database URL from environment or use default
+    /// Get test database URL from environment or use default (owner role)
     fn get_test_database_url() -> String {
         std::env::var("TEST_DATABASE_URL")
             .unwrap_or_else(|_| "postgresql://servo:servo@localhost:5432/servo_test".to_string())
     }
 
-    /// Setup test database with migrations
+    /// Get test application database URL (non-owner, RLS enforced)
+    fn get_test_app_database_url() -> String {
+        std::env::var("TEST_APP_DATABASE_URL").unwrap_or_else(|_| {
+            "postgresql://servo_app:servo_app@localhost:5432/servo_test".to_string()
+        })
+    }
+
+    /// Setup test database with migrations using owner role, then return storage connected as app role
     async fn setup_test_db() -> Result<PostgresStorage> {
-        let db_url = get_test_database_url();
-        let storage = PostgresStorage::new(&db_url).await?;
+        // Owner connection for DDL/migrations
+        let owner_url = get_test_database_url();
+        let owner_pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&owner_url)
+            .await?;
 
-        // Drop all tables to ensure clean state (important for CI where DB persists across test runs)
+        // Drop and recreate schema to ensure clean state across CI runs
         sqlx::query("DROP SCHEMA public CASCADE")
-            .execute(storage.pool())
+            .execute(&owner_pool)
             .await?;
-
         sqlx::query("CREATE SCHEMA public")
-            .execute(storage.pool())
+            .execute(&owner_pool)
             .await?;
-
-        // Grant permissions on the schema
         sqlx::query("GRANT ALL ON SCHEMA public TO PUBLIC")
-            .execute(storage.pool())
+            .execute(&owner_pool)
             .await?;
 
-        // Run migrations fresh
-        crate::migrations::run_migrations(storage.pool()).await?;
+        // Run migrations (creates RLS policies and servo_app role/grants)
+        crate::migrations::run_migrations(&owner_pool).await?;
 
-        // Close the pool and create a new connection to ensure schema changes are picked up
-        drop(storage);
-        let storage = PostgresStorage::new(&db_url).await?;
+        // Connect as app role for tests (RLS enforced)
+        let app_url = get_test_app_database_url();
+        let storage = PostgresStorage::new(&app_url).await?;
 
         Ok(storage)
     }
