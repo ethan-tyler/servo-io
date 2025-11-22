@@ -1226,6 +1226,9 @@ mod tests {
         let app_url = get_test_app_database_url();
         let storage = PostgresStorage::new(&app_url).await?;
 
+        // Clean any leftover data from previous test runs
+        cleanup_test_db(&storage).await?;
+
         Ok(storage)
     }
 
@@ -1284,12 +1287,26 @@ mod tests {
             .await
     }
 
-    fn unique_tenant() -> TenantId {
-        TenantId::new(uuid::Uuid::new_v4().to_string())
-    }
+    /// Clean up test data after each test
+    async fn cleanup_test_db(storage: &PostgresStorage) -> Result<()> {
+        // Use session_replication_role to bypass RLS and triggers during cleanup
+        // This allows TRUNCATE to work even with FORCE ROW LEVEL SECURITY
+        let mut tx = storage.pool().begin().await?;
 
-    fn unique_name(prefix: &str) -> String {
-        format!("{}_{}", prefix, uuid::Uuid::new_v4())
+        sqlx::query("SET session_replication_role = 'replica'")
+            .execute(&mut *tx)
+            .await?;
+
+        sqlx::query("TRUNCATE assets, workflows, executions, asset_dependencies CASCADE")
+            .execute(&mut *tx)
+            .await?;
+
+        sqlx::query("SET session_replication_role = 'origin'")
+            .execute(&mut *tx)
+            .await?;
+
+        tx.commit().await?;
+        Ok(())
     }
 
     #[test]
