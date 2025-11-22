@@ -103,8 +103,8 @@ impl PostgresStorage {
     {
         let mut tx = self.pool.begin().await?;
 
-        // Set tenant context for RLS enforcement
-        sqlx::query("SET LOCAL app.current_tenant = $1")
+        // Set tenant context for RLS enforcement. Use set_config to avoid SET parameter syntax issues.
+        sqlx::query("SELECT set_config('app.current_tenant', $1, true)")
             .bind(tenant_id.as_str())
             .execute(&mut *tx)
             .await?;
