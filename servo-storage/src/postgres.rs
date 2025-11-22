@@ -1193,6 +1193,10 @@ mod tests {
         // Run migrations fresh
         crate::migrations::run_migrations(storage.pool()).await?;
 
+        // Close the pool and create a new connection to ensure schema changes are picked up
+        drop(storage);
+        let storage = PostgresStorage::new(&db_url).await?;
+
         Ok(storage)
     }
 
