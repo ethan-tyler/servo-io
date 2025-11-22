@@ -1179,9 +1179,6 @@ mod tests {
         // Run migrations
         crate::migrations::run_migrations(storage.pool()).await?;
 
-        // Clean any leftover data from previous test runs
-        cleanup_test_db(&storage).await?;
-
         Ok(storage)
     }
 
