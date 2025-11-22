@@ -24,6 +24,9 @@ tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 
+# UUID
+uuid = { workspace = true }
+
 # Error handling
 anyhow = { workspace = true }
 
