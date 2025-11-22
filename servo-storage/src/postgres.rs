@@ -1186,26 +1186,49 @@ mod tests {
     /// Note: This should be called at the START of each test to ensure clean state,
     /// since cleanup won't run if a test fails
     async fn cleanup_test_db(storage: &PostgresStorage) -> Result<()> {
-        // Use session_replication_role to bypass RLS and triggers during cleanup
-        // This allows TRUNCATE to work even with FORCE ROW LEVEL SECURITY
-        let mut tx = storage.pool().begin().await?;
-
-        // Set replication role to bypass RLS/triggers
-        sqlx::query("SET LOCAL session_replication_role = 'replica'")
-            .execute(&mut *tx)
+        // Temporarily disable RLS to allow cleanup of all data regardless of tenant
+        // The test database user should be the table owner and have this privilege
+        sqlx::query("ALTER TABLE asset_dependencies DISABLE ROW LEVEL SECURITY")
+            .execute(storage.pool())
+            .await?;
+        sqlx::query("ALTER TABLE assets DISABLE ROW LEVEL SECURITY")
+            .execute(storage.pool())
+            .await?;
+        sqlx::query("ALTER TABLE workflows DISABLE ROW LEVEL SECURITY")
+            .execute(storage.pool())
+            .await?;
+        sqlx::query("ALTER TABLE executions DISABLE ROW LEVEL SECURITY")
+            .execute(storage.pool())
             .await?;
 
-        // TRUNCATE all tables - this will cascade to dependencies
-        sqlx::query("TRUNCATE TABLE asset_dependencies, assets, workflows, executions CASCADE")
-            .execute(&mut *tx)
+        // Delete all data
+        sqlx::query("DELETE FROM asset_dependencies")
+            .execute(storage.pool())
+            .await?;
+        sqlx::query("DELETE FROM executions")
+            .execute(storage.pool())
+            .await?;
+        sqlx::query("DELETE FROM assets")
+            .execute(storage.pool())
+            .await?;
+        sqlx::query("DELETE FROM workflows")
+            .execute(storage.pool())
             .await?;
 
-        // Reset replication role
-        sqlx::query("SET LOCAL session_replication_role = 'origin'")
-            .execute(&mut *tx)
+        // Re-enable RLS
+        sqlx::query("ALTER TABLE asset_dependencies ENABLE ROW LEVEL SECURITY")
+            .execute(storage.pool())
+            .await?;
+        sqlx::query("ALTER TABLE assets ENABLE ROW LEVEL SECURITY")
+            .execute(storage.pool())
+            .await?;
+        sqlx::query("ALTER TABLE workflows ENABLE ROW LEVEL SECURITY")
+            .execute(storage.pool())
+            .await?;
+        sqlx::query("ALTER TABLE executions ENABLE ROW LEVEL SECURITY")
+            .execute(storage.pool())
             .await?;
 
-        tx.commit().await?;
         Ok(())
     }
 
