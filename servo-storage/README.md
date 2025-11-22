@@ -168,3 +168,51 @@ use servo_storage::migrations::run_migrations;
 let pool = storage.pool();
 run_migrations(pool).await?;
 ```
+
+## Logging & Observability
+
+The storage layer provides comprehensive structured logging using the `tracing` crate.
+
+### Logged Events
+
+- **Database Errors**: All database errors are logged with error codes and context
+- **Slow Queries**: Operations taking >100ms are logged as warnings with tenant_id and duration
+- **Connection Pool Issues**: Pool exhaustion and connection failures are logged as errors
+- **Constraint Violations**: Validation errors (unique violations, FK violations, CHECK failures) are logged as warnings
+
+### JSON Logging (Production)
+
+Configure JSON-structured logging for production environments:
+
+```rust
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+
+// Initialize JSON logging
+tracing_subscriber::registry()
+    .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
+    .with(tracing_subscriber::fmt::layer().json())
+    .init();
+```
+
+### Log Levels
+
+- `ERROR`: Critical errors (connection failures, pool exhausted, unexpected database errors)
+- `WARN`: Expected errors (constraint violations, slow queries >100ms)
+- `INFO`: Normal operations (via tracing spans)
+
+### Example Log Output
+
+```json
+{
+  "timestamp": "2025-11-22T10:30:45.123Z",
+  "level": "WARN",
+  "message": "Slow database operation detected",
+  "tenant_id": "acme-corp",
+  "duration_ms": 150,
+  "span": {
+    "name": "create_asset",
+    "tenant": "acme-corp",
+    "asset_id": "123e4567-e89b-12d3-a456-426614174000"
+  }
+}
+```

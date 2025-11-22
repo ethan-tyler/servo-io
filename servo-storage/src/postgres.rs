@@ -3,7 +3,8 @@
 use crate::{models::*, Result, TenantId};
 use futures::future::BoxFuture;
 use sqlx::{postgres::PgPoolOptions, PgPool, Postgres, Transaction};
-use tracing::instrument;
+use std::time::Instant;
+use tracing::{error, instrument, warn};
 use uuid::Uuid;
 
 /// Configuration for the PostgreSQL connection pool
@@ -101,6 +102,7 @@ impl PostgresStorage {
         F: for<'c> FnOnce(&'c mut Transaction<'_, Postgres>) -> BoxFuture<'c, Result<T>> + Send,
         T: Send,
     {
+        let start = Instant::now();
         let mut tx = self.pool.begin().await?;
 
         // Set tenant context for RLS enforcement. Use set_config to avoid SET parameter syntax issues.
@@ -110,7 +112,7 @@ impl PostgresStorage {
             .await?;
 
         // Execute the closure
-        match f(&mut tx).await {
+        let result = match f(&mut tx).await {
             Ok(result) => {
                 tx.commit().await?;
                 Ok(result)
@@ -119,7 +121,19 @@ impl PostgresStorage {
                 tx.rollback().await?;
                 Err(e)
             }
+        };
+
+        // Log slow operations (>100ms)
+        let elapsed = start.elapsed();
+        if elapsed.as_millis() > 100 {
+            warn!(
+                tenant_id = %tenant_id.as_str(),
+                duration_ms = elapsed.as_millis(),
+                "Slow database operation detected"
+            );
         }
+
+        result
     }
 
     /// Execute a closure within a transaction without tenant context
@@ -1130,9 +1144,11 @@ fn map_db_error(err: sqlx::Error) -> crate::Error {
     // Map connection-related errors
     match &err {
         sqlx::Error::PoolTimedOut => {
+            error!(error = %err, "Connection pool timed out");
             return crate::Error::PoolExhausted("Connection pool timed out".to_string());
         }
         sqlx::Error::PoolClosed => {
+            error!(error = %err, "Connection pool closed");
             return crate::Error::ConnectionFailed("Connection pool closed".to_string());
         }
         _ => {}
@@ -1144,14 +1160,29 @@ fn map_db_error(err: sqlx::Error) -> crate::Error {
             match code {
                 // unique_violation - duplicate key
                 "23505" => {
+                    warn!(
+                        error_code = code,
+                        message = db_err.message(),
+                        "Unique constraint violation"
+                    );
                     return crate::Error::AlreadyExists(db_err.message().to_string());
                 }
                 // foreign_key_violation - referenced record doesn't exist
                 "23503" => {
+                    warn!(
+                        error_code = code,
+                        message = db_err.message(),
+                        "Foreign key violation"
+                    );
                     return crate::Error::NotFound(db_err.message().to_string());
                 }
                 // not_null_violation - required field is null
                 "23502" => {
+                    warn!(
+                        error_code = code,
+                        message = db_err.message(),
+                        "Not null violation"
+                    );
                     return crate::Error::ValidationError(format!(
                         "Required field cannot be null: {}",
                         db_err.message()
@@ -1159,6 +1190,11 @@ fn map_db_error(err: sqlx::Error) -> crate::Error {
                 }
                 // check_violation - CHECK constraint failed
                 "23514" => {
+                    warn!(
+                        error_code = code,
+                        message = db_err.message(),
+                        "CHECK constraint violation"
+                    );
                     return crate::Error::ValidationError(format!(
                         "Constraint violation: {}",
                         db_err.message()
@@ -1166,17 +1202,34 @@ fn map_db_error(err: sqlx::Error) -> crate::Error {
                 }
                 // too_many_connections - connection pool exhausted
                 "53300" => {
+                    error!(
+                        error_code = code,
+                        message = db_err.message(),
+                        "Database connection limit reached"
+                    );
                     return crate::Error::PoolExhausted(db_err.message().to_string());
                 }
                 // connection_failure - database connection failed
                 "08006" | "08001" | "08003" | "08004" => {
+                    error!(
+                        error_code = code,
+                        message = db_err.message(),
+                        "Database connection failed"
+                    );
                     return crate::Error::ConnectionFailed(db_err.message().to_string());
                 }
-                _ => {}
+                _ => {
+                    error!(
+                        error_code = code,
+                        message = db_err.message(),
+                        "Unexpected database error"
+                    );
+                }
             }
         }
     }
 
+    error!(error = %err, "Database error");
     crate::Error::Database(err)
 }
 

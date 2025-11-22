@@ -24,9 +24,10 @@ ignore = [
     # paste crate is unmaintained but stable and widely used
     "RUSTSEC-2024-0436",
     "RUSTSEC-2024-0375",
-    # TODO: Upgrade sqlx to 0.8.x to fix this vulnerability
-    # Binary Protocol Misinterpretation in sqlx 0.7.4
-    "RUSTSEC-2024-0363",
+    # Marvin Attack in rsa 0.9.9 - only affects MySQL authentication
+    # We only use PostgreSQL, so this code path is never executed
+    # No fixed upgrade available; acceptable risk for medium severity issue
+    "RUSTSEC-2023-0071",
 ]
 
 [licenses]
