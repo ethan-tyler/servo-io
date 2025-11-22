@@ -1057,13 +1057,12 @@ impl PostgresStorage {
     ) -> Result<Vec<crate::models::AssetDependencyModel>> {
         use std::collections::{HashSet, VecDeque};
 
-        let mut visited_assets = HashSet::new();
-        let mut visited_deps = HashSet::new();
+        let mut visited = HashSet::new();
         let mut queue = VecDeque::new();
         let mut lineage = Vec::new();
 
         queue.push_back((asset_id, 0));
-        visited_assets.insert(asset_id);
+        visited.insert(asset_id);
 
         while let Some((current_id, depth)) = queue.pop_front() {
             if depth >= max_depth {
@@ -1075,40 +1074,20 @@ impl PostgresStorage {
 
             // Add upstream dependencies to lineage
             for dep in upstream {
-                // Track unique dependencies by (upstream, downstream, type)
-                let dep_key = (
-                    dep.upstream_asset_id,
-                    dep.downstream_asset_id,
-                    dep.dependency_type.clone(),
-                );
-                if visited_deps.insert(dep_key) {
-                    lineage.push(dep.clone());
-                }
-
-                // Queue unvisited assets for traversal
-                if !visited_assets.contains(&dep.upstream_asset_id) {
-                    visited_assets.insert(dep.upstream_asset_id);
+                if !visited.contains(&dep.upstream_asset_id) {
+                    visited.insert(dep.upstream_asset_id);
                     queue.push_back((dep.upstream_asset_id, depth + 1));
                 }
+                lineage.push(dep);
             }
 
             // Add downstream dependencies to lineage
             for dep in downstream {
-                // Track unique dependencies by (upstream, downstream, type)
-                let dep_key = (
-                    dep.upstream_asset_id,
-                    dep.downstream_asset_id,
-                    dep.dependency_type.clone(),
-                );
-                if visited_deps.insert(dep_key) {
-                    lineage.push(dep.clone());
-                }
-
-                // Queue unvisited assets for traversal
-                if !visited_assets.contains(&dep.downstream_asset_id) {
-                    visited_assets.insert(dep.downstream_asset_id);
+                if !visited.contains(&dep.downstream_asset_id) {
+                    visited.insert(dep.downstream_asset_id);
                     queue.push_back((dep.downstream_asset_id, depth + 1));
                 }
+                lineage.push(dep);
             }
         }
 
@@ -1186,102 +1165,21 @@ mod tests {
     use chrono::Utc;
     use sqlx::types::Json;
 
-    /// Get test database URL from environment or use default (owner role)
+    /// Get test database URL from environment or use default
     fn get_test_database_url() -> String {
         std::env::var("TEST_DATABASE_URL")
             .unwrap_or_else(|_| "postgresql://servo:servo@localhost:5432/servo_test".to_string())
     }
 
-    /// Get test application database URL (non-owner, RLS enforced)
-    fn get_test_app_database_url() -> String {
-        std::env::var("TEST_APP_DATABASE_URL").unwrap_or_else(|_| {
-            "postgresql://servo_app:servo_app@localhost:5432/servo_test".to_string()
-        })
-    }
-
-    /// Setup test database with migrations using owner role, then return storage connected as app role
+    /// Setup test database with migrations
     async fn setup_test_db() -> Result<PostgresStorage> {
-        // Owner connection for DDL/migrations
-        let owner_url = get_test_database_url();
-        let owner_pool = PgPoolOptions::new()
-            .max_connections(1)
-            .connect(&owner_url)
-            .await?;
+        let db_url = get_test_database_url();
+        let storage = PostgresStorage::new(&db_url).await?;
 
-        // Drop and recreate schema to ensure clean state across CI runs
-        sqlx::query("DROP SCHEMA public CASCADE")
-            .execute(&owner_pool)
-            .await?;
-        sqlx::query("CREATE SCHEMA public")
-            .execute(&owner_pool)
-            .await?;
-        sqlx::query("GRANT ALL ON SCHEMA public TO PUBLIC")
-            .execute(&owner_pool)
-            .await?;
-
-        // Run migrations (creates RLS policies and servo_app role/grants)
-        crate::migrations::run_migrations(&owner_pool).await?;
-
-        // Connect as app role for tests (RLS enforced)
-        let app_url = get_test_app_database_url();
-        let storage = PostgresStorage::new(&app_url).await?;
+        // Run migrations
+        crate::migrations::run_migrations(storage.pool()).await?;
 
         Ok(storage)
-    }
-
-    fn unique_tenant() -> TenantId {
-        TenantId::new(uuid::Uuid::new_v4().to_string())
-    }
-
-    fn unique_name(prefix: &str) -> String {
-        format!("{}_{}", prefix, uuid::Uuid::new_v4())
-    }
-
-    /// Clean up all data for a specific tenant (tenant-scoped, preserves RLS)
-    async fn cleanup_tenant(storage: &PostgresStorage, tenant: &TenantId) -> Result<()> {
-        // Clone tenant string to satisfy 'static lifetime requirement of async move
-        let tenant_str = tenant.as_str().to_string();
-
-        // Delete in correct order to respect foreign keys
-        // asset_dependencies will cascade from assets
-        storage
-            .with_tenant_context(tenant, |tx| {
-                let tenant_str = tenant_str.clone();
-                Box::pin(async move {
-                    // Delete executions first (references workflows)
-                    sqlx::query("DELETE FROM executions WHERE tenant_id = $1")
-                        .bind(&tenant_str)
-                        .execute(&mut **tx)
-                        .await?;
-
-                    // Delete workflows
-                    sqlx::query("DELETE FROM workflows WHERE tenant_id = $1")
-                        .bind(&tenant_str)
-                        .execute(&mut **tx)
-                        .await?;
-
-                    // Delete asset_dependencies (will be deleted by cascade, but explicit is safer)
-                    sqlx::query(
-                        "DELETE FROM asset_dependencies WHERE id IN (
-                            SELECT ad.id FROM asset_dependencies ad
-                            JOIN assets a ON ad.upstream_asset_id = a.id
-                            WHERE a.tenant_id = $1
-                        )",
-                    )
-                    .bind(&tenant_str)
-                    .execute(&mut **tx)
-                    .await?;
-
-                    // Delete assets (this will cascade to asset_dependencies due to FK)
-                    sqlx::query("DELETE FROM assets WHERE tenant_id = $1")
-                        .bind(&tenant_str)
-                        .execute(&mut **tx)
-                        .await?;
-
-                    Ok(())
-                })
-            })
-            .await
     }
 
     /// Clean up test data after each test
@@ -1349,6 +1247,14 @@ mod tests {
         Ok(())
     }
 
+    fn unique_tenant() -> TenantId {
+        TenantId::new(uuid::Uuid::new_v4().to_string())
+    }
+
+    fn unique_name(prefix: &str) -> String {
+        format!("{}_{}", prefix, uuid::Uuid::new_v4())
+    }
+
     #[test]
     fn test_validate_dependency_type() {
         assert!(PostgresStorage::validate_dependency_type("data").is_ok());
@@ -1405,8 +1311,6 @@ mod tests {
         assert_eq!(retrieved.id, asset.id);
         assert_eq!(retrieved.name, asset.name);
         assert_eq!(retrieved.description, asset.description);
-
-        cleanup_tenant(&storage, &tenant).await.unwrap();
     }
 
     #[tokio::test]
@@ -1451,7 +1355,6 @@ mod tests {
             retrieved.description,
             Some("Updated description".to_string())
         );
-        cleanup_tenant(&storage, &tenant).await.unwrap();
     }
 
     #[tokio::test]
@@ -1487,7 +1390,6 @@ mod tests {
         let result = storage.get_asset(asset.id, &tenant).await;
 
         assert!(result.is_err());
-        cleanup_tenant(&storage, &tenant).await.unwrap();
     }
 
     #[tokio::test]
@@ -1537,16 +1439,12 @@ mod tests {
             .expect("Failed to count assets");
 
         assert_eq!(count, 5);
-        cleanup_tenant(&storage, &tenant).await.unwrap();
     }
 
     #[tokio::test]
     #[ignore]
     async fn test_tenant_isolation() {
         let storage = setup_test_db().await.expect("Failed to setup test db");
-
-        let tenant1 = unique_tenant();
-        let tenant2 = unique_tenant();
 
         let tenant1 = unique_tenant();
         let tenant2 = unique_tenant();
@@ -1609,7 +1507,6 @@ mod tests {
         let result = storage.get_asset(asset2.id, &tenant1).await;
 
         assert!(result.is_err());
-        cleanup_tenant(&storage, &tenant1).await.unwrap();
     }
 
     #[tokio::test]
@@ -1680,15 +1577,12 @@ mod tests {
 
         assert_eq!(downstream_of_upstream.len(), 1);
         assert_eq!(downstream_of_upstream[0].downstream_asset_id, downstream.id);
-        cleanup_tenant(&storage, &tenant).await.unwrap();
     }
 
     #[tokio::test]
     #[ignore]
     async fn test_asset_lineage() {
         let storage = setup_test_db().await.expect("Failed to setup test db");
-
-        let tenant = unique_tenant();
 
         let tenant = unique_tenant();
 
@@ -1751,7 +1645,6 @@ mod tests {
             .expect("Failed to get lineage");
 
         assert_eq!(lineage.len(), 2);
-        cleanup_tenant(&storage, &tenant).await.unwrap();
     }
 
     #[tokio::test]
@@ -1792,9 +1685,6 @@ mod tests {
             .expect("Failed to list workflows");
 
         assert_eq!(workflows.len(), 1);
-        cleanup_tenant(&storage, &TenantId::new("tenant1"))
-            .await
-            .unwrap();
     }
 
     #[tokio::test]
@@ -1853,9 +1743,6 @@ mod tests {
             .expect("Failed to list executions");
 
         assert_eq!(executions.len(), 1);
-        cleanup_tenant(&storage, &TenantId::new("tenant1"))
-            .await
-            .unwrap();
     }
 
     #[tokio::test]
@@ -1973,8 +1860,5 @@ mod tests {
             .expect("Tenant2 should be able to access their own asset");
 
         assert_eq!(asset2_valid.id, asset2.id);
-        cleanup_tenant(&storage, &TenantId::new("tenant1"))
-            .await
-            .unwrap();
     }
 }
