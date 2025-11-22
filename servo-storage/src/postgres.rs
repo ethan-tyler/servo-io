@@ -1179,14 +1179,31 @@ mod tests {
         // Run migrations
         crate::migrations::run_migrations(storage.pool()).await?;
 
+        // Clean any leftover data from previous test runs
+        cleanup_test_db(&storage).await?;
+
         Ok(storage)
     }
 
     /// Clean up test data after each test
     async fn cleanup_test_db(storage: &PostgresStorage) -> Result<()> {
-        sqlx::query("TRUNCATE assets, workflows, executions, asset_dependencies CASCADE")
-            .execute(storage.pool())
+        // Use session_replication_role to bypass RLS and triggers during cleanup
+        // This allows TRUNCATE to work even with FORCE ROW LEVEL SECURITY
+        let mut tx = storage.pool().begin().await?;
+
+        sqlx::query("SET session_replication_role = 'replica'")
+            .execute(&mut *tx)
             .await?;
+
+        sqlx::query("TRUNCATE assets, workflows, executions, asset_dependencies CASCADE")
+            .execute(&mut *tx)
+            .await?;
+
+        sqlx::query("SET session_replication_role = 'origin'")
+            .execute(&mut *tx)
+            .await?;
+
+        tx.commit().await?;
         Ok(())
     }
 
