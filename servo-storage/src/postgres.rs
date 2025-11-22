@@ -1317,17 +1317,32 @@ mod tests {
             .execute(storage.pool())
             .await?;
 
-        // Re-enable RLS
+        // Re-enable RLS with FORCE to ensure even table owner respects policies
         sqlx::query("ALTER TABLE asset_dependencies ENABLE ROW LEVEL SECURITY")
             .execute(storage.pool())
             .await?;
+        sqlx::query("ALTER TABLE asset_dependencies FORCE ROW LEVEL SECURITY")
+            .execute(storage.pool())
+            .await?;
+
         sqlx::query("ALTER TABLE assets ENABLE ROW LEVEL SECURITY")
             .execute(storage.pool())
             .await?;
+        sqlx::query("ALTER TABLE assets FORCE ROW LEVEL SECURITY")
+            .execute(storage.pool())
+            .await?;
+
         sqlx::query("ALTER TABLE workflows ENABLE ROW LEVEL SECURITY")
             .execute(storage.pool())
             .await?;
+        sqlx::query("ALTER TABLE workflows FORCE ROW LEVEL SECURITY")
+            .execute(storage.pool())
+            .await?;
+
         sqlx::query("ALTER TABLE executions ENABLE ROW LEVEL SECURITY")
+            .execute(storage.pool())
+            .await?;
+        sqlx::query("ALTER TABLE executions FORCE ROW LEVEL SECURITY")
             .execute(storage.pool())
             .await?;
 
