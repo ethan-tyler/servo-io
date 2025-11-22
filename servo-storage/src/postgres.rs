@@ -1285,20 +1285,25 @@ mod tests {
     }
 
     /// Clean up test data after each test
+    /// Note: This should be called at the START of each test to ensure clean state,
+    /// since cleanup won't run if a test fails
     async fn cleanup_test_db(storage: &PostgresStorage) -> Result<()> {
         // Use session_replication_role to bypass RLS and triggers during cleanup
         // This allows TRUNCATE to work even with FORCE ROW LEVEL SECURITY
         let mut tx = storage.pool().begin().await?;
 
-        sqlx::query("SET session_replication_role = 'replica'")
+        // Set replication role to bypass RLS/triggers
+        sqlx::query("SET LOCAL session_replication_role = 'replica'")
             .execute(&mut *tx)
             .await?;
 
-        sqlx::query("TRUNCATE assets, workflows, executions, asset_dependencies CASCADE")
+        // TRUNCATE all tables - this will cascade to dependencies
+        sqlx::query("TRUNCATE TABLE asset_dependencies, assets, workflows, executions CASCADE")
             .execute(&mut *tx)
             .await?;
 
-        sqlx::query("SET session_replication_role = 'origin'")
+        // Reset replication role
+        sqlx::query("SET LOCAL session_replication_role = 'origin'")
             .execute(&mut *tx)
             .await?;
 
@@ -1501,6 +1506,8 @@ mod tests {
     #[ignore]
     async fn test_tenant_isolation() {
         let storage = setup_test_db().await.expect("Failed to setup test db");
+        cleanup_test_db(&storage).await.expect("Failed to cleanup before test");
+
         let tenant1 = unique_tenant();
         let tenant2 = unique_tenant();
 
@@ -1643,6 +1650,8 @@ mod tests {
     #[ignore]
     async fn test_asset_lineage() {
         let storage = setup_test_db().await.expect("Failed to setup test db");
+        cleanup_test_db(&storage).await.expect("Failed to cleanup before test");
+
         let tenant = unique_tenant();
 
         let tenant = unique_tenant();
@@ -1817,6 +1826,7 @@ mod tests {
     #[ignore]
     async fn test_rls_enforcement_comprehensive() {
         let storage = setup_test_db().await.expect("Failed to setup test db");
+        cleanup_test_db(&storage).await.expect("Failed to cleanup before test");
 
         // Create asset for tenant1
         let asset1 = AssetModel {
