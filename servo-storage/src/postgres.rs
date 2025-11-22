@@ -1190,6 +1190,14 @@ mod tests {
         Ok(())
     }
 
+    fn unique_tenant() -> TenantId {
+        TenantId::new(uuid::Uuid::new_v4().to_string())
+    }
+
+    fn unique_name(prefix: &str) -> String {
+        format!("{}_{}", prefix, uuid::Uuid::new_v4())
+    }
+
     #[test]
     fn test_validate_dependency_type() {
         assert!(PostgresStorage::validate_dependency_type("data").is_ok());
@@ -1217,28 +1225,29 @@ mod tests {
     #[ignore] // Run with: cargo test -- --ignored
     async fn test_create_and_get_asset() {
         let storage = setup_test_db().await.expect("Failed to setup test db");
+        let tenant = unique_tenant();
 
         let asset = AssetModel {
             id: Uuid::new_v4(),
-            name: "test_asset".to_string(),
+            name: unique_name("test_asset"),
             description: Some("Test description".to_string()),
             asset_type: "table".to_string(),
             owner: Some("test_user".to_string()),
             tags: Json(vec!["tag1".to_string(), "tag2".to_string()]),
-            tenant_id: Some("tenant1".to_string()),
+            tenant_id: Some(tenant.as_str().to_string()),
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
 
         // Create asset
         storage
-            .create_asset(&asset, &TenantId::new("tenant1"))
+            .create_asset(&asset, &tenant)
             .await
             .expect("Failed to create asset");
 
         // Get asset
         let retrieved = storage
-            .get_asset(asset.id, &TenantId::new("tenant1"))
+            .get_asset(asset.id, &tenant)
             .await
             .expect("Failed to get asset");
 
@@ -1253,21 +1262,22 @@ mod tests {
     #[ignore]
     async fn test_update_asset() {
         let storage = setup_test_db().await.expect("Failed to setup test db");
+        let tenant = unique_tenant();
 
         let mut asset = AssetModel {
             id: Uuid::new_v4(),
-            name: "test_asset".to_string(),
+            name: unique_name("test_asset"),
             description: Some("Original description".to_string()),
             asset_type: "table".to_string(),
             owner: Some("test_user".to_string()),
             tags: Json(vec![]),
-            tenant_id: Some("tenant1".to_string()),
+            tenant_id: Some(tenant.as_str().to_string()),
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
 
         storage
-            .create_asset(&asset, &TenantId::new("tenant1"))
+            .create_asset(&asset, &tenant)
             .await
             .expect("Failed to create asset");
 
@@ -1276,13 +1286,13 @@ mod tests {
         asset.updated_at = Utc::now();
 
         storage
-            .update_asset(&asset, &TenantId::new("tenant1"))
+            .update_asset(&asset, &tenant)
             .await
             .expect("Failed to update asset");
 
         // Verify update
         let retrieved = storage
-            .get_asset(asset.id, &TenantId::new("tenant1"))
+            .get_asset(asset.id, &tenant)
             .await
             .expect("Failed to get asset");
 
@@ -1298,32 +1308,33 @@ mod tests {
     #[ignore]
     async fn test_delete_asset() {
         let storage = setup_test_db().await.expect("Failed to setup test db");
+        let tenant = unique_tenant();
 
         let asset = AssetModel {
             id: Uuid::new_v4(),
-            name: "test_asset".to_string(),
+            name: unique_name("test_asset"),
             description: None,
             asset_type: "table".to_string(),
             owner: None,
             tags: Json(vec![]),
-            tenant_id: Some("tenant1".to_string()),
+            tenant_id: Some(tenant.as_str().to_string()),
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
 
         storage
-            .create_asset(&asset, &TenantId::new("tenant1"))
+            .create_asset(&asset, &tenant)
             .await
             .expect("Failed to create asset");
 
         // Delete asset
         storage
-            .delete_asset(asset.id, &TenantId::new("tenant1"))
+            .delete_asset(asset.id, &tenant)
             .await
             .expect("Failed to delete asset");
 
         // Verify deletion
-        let result = storage.get_asset(asset.id, &TenantId::new("tenant1")).await;
+        let result = storage.get_asset(asset.id, &tenant).await;
 
         assert!(result.is_err());
 
@@ -1334,35 +1345,36 @@ mod tests {
     #[ignore]
     async fn test_list_assets_with_pagination() {
         let storage = setup_test_db().await.expect("Failed to setup test db");
+        let tenant = unique_tenant();
 
         // Create multiple assets
         for i in 0..5 {
             let asset = AssetModel {
                 id: Uuid::new_v4(),
-                name: format!("asset_{}", i),
+                name: unique_name(&format!("asset_{}", i)),
                 description: None,
                 asset_type: "table".to_string(),
                 owner: None,
                 tags: Json(vec![]),
-                tenant_id: Some("tenant1".to_string()),
+                tenant_id: Some(tenant.as_str().to_string()),
                 created_at: Utc::now(),
                 updated_at: Utc::now(),
             };
 
             storage
-                .create_asset(&asset, &TenantId::new("tenant1"))
+                .create_asset(&asset, &tenant)
                 .await
                 .expect("Failed to create asset");
         }
 
         // List with pagination
         let page1 = storage
-            .list_assets(&TenantId::new("tenant1"), 2, 0)
+            .list_assets(&tenant, 2, 0)
             .await
             .expect("Failed to list assets");
 
         let page2 = storage
-            .list_assets(&TenantId::new("tenant1"), 2, 2)
+            .list_assets(&tenant, 2, 2)
             .await
             .expect("Failed to list assets");
 
@@ -1371,7 +1383,7 @@ mod tests {
 
         // Verify total count
         let count = storage
-            .count_assets(&TenantId::new("tenant1"))
+            .count_assets(&tenant)
             .await
             .expect("Failed to count assets");
 
@@ -1384,65 +1396,65 @@ mod tests {
     #[ignore]
     async fn test_tenant_isolation() {
         let storage = setup_test_db().await.expect("Failed to setup test db");
+        let tenant1 = unique_tenant();
+        let tenant2 = unique_tenant();
 
         // Create assets for tenant1
         let asset1 = AssetModel {
             id: Uuid::new_v4(),
-            name: "tenant1_asset".to_string(),
+            name: unique_name("tenant1_asset"),
             description: None,
             asset_type: "table".to_string(),
             owner: None,
             tags: Json(vec![]),
-            tenant_id: Some("tenant1".to_string()),
+            tenant_id: Some(tenant1.as_str().to_string()),
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
 
         storage
-            .create_asset(&asset1, &TenantId::new("tenant1"))
+            .create_asset(&asset1, &tenant1)
             .await
             .expect("Failed to create asset for tenant1");
 
         // Create assets for tenant2
         let asset2 = AssetModel {
             id: Uuid::new_v4(),
-            name: "tenant2_asset".to_string(),
+            name: unique_name("tenant2_asset"),
             description: None,
             asset_type: "table".to_string(),
             owner: None,
             tags: Json(vec![]),
-            tenant_id: Some("tenant2".to_string()),
+            tenant_id: Some(tenant2.as_str().to_string()),
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
 
         storage
-            .create_asset(&asset2, &TenantId::new("tenant2"))
+            .create_asset(&asset2, &tenant2)
             .await
             .expect("Failed to create asset for tenant2");
 
         // Tenant1 should only see their asset
         let tenant1_assets = storage
-            .list_assets(&TenantId::new("tenant1"), 100, 0)
+            .list_assets(&tenant1, 100, 0)
             .await
             .expect("Failed to list tenant1 assets");
 
         assert_eq!(tenant1_assets.len(), 1);
-        assert_eq!(tenant1_assets[0].name, "tenant1_asset");
+        assert_eq!(tenant1_assets[0].id, asset1.id);
 
         // Tenant2 should only see their asset
         let tenant2_assets = storage
-            .list_assets(&TenantId::new("tenant2"), 100, 0)
+            .list_assets(&tenant2, 100, 0)
             .await
             .expect("Failed to list tenant2 assets");
 
         assert_eq!(tenant2_assets.len(), 1);
-        assert_eq!(tenant2_assets[0].name, "tenant2_asset");
+        assert_eq!(tenant2_assets[0].id, asset2.id);
 
         // Tenant1 should not be able to access tenant2's asset
-        let result = storage
-            .get_asset(asset2.id, &TenantId::new("tenant1"))
-            .await;
+        let result = storage.get_asset(asset2.id, &tenant1).await;
 
         assert!(result.is_err());
 
@@ -1453,51 +1465,47 @@ mod tests {
     #[ignore]
     async fn test_asset_dependencies() {
         let storage = setup_test_db().await.expect("Failed to setup test db");
+        let tenant = unique_tenant();
 
         // Create upstream asset
         let upstream = AssetModel {
             id: Uuid::new_v4(),
-            name: "upstream".to_string(),
+            name: unique_name("upstream"),
             description: None,
             asset_type: "table".to_string(),
             owner: None,
             tags: Json(vec![]),
-            tenant_id: Some("tenant1".to_string()),
+            tenant_id: Some(tenant.as_str().to_string()),
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
 
         storage
-            .create_asset(&upstream, &TenantId::new("tenant1"))
+            .create_asset(&upstream, &tenant)
             .await
             .expect("Failed to create upstream asset");
 
         // Create downstream asset
         let downstream = AssetModel {
             id: Uuid::new_v4(),
-            name: "downstream".to_string(),
+            name: unique_name("downstream"),
             description: None,
             asset_type: "table".to_string(),
             owner: None,
             tags: Json(vec![]),
-            tenant_id: Some("tenant1".to_string()),
+            tenant_id: Some(tenant.as_str().to_string()),
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
 
         storage
-            .create_asset(&downstream, &TenantId::new("tenant1"))
+            .create_asset(&downstream, &tenant)
             .await
             .expect("Failed to create downstream asset");
 
         // Create dependency
         let dep_id = storage
-            .create_asset_dependency(
-                upstream.id,
-                downstream.id,
-                "data",
-                &TenantId::new("tenant1"),
-            )
+            .create_asset_dependency(upstream.id, downstream.id, "data", &tenant)
             .await
             .expect("Failed to create dependency");
 
@@ -1505,7 +1513,7 @@ mod tests {
 
         // Get dependencies
         let (upstream_deps, _downstream_deps) = storage
-            .get_asset_dependencies(downstream.id, &TenantId::new("tenant1"))
+            .get_asset_dependencies(downstream.id, &tenant)
             .await
             .expect("Failed to get dependencies");
 
@@ -1515,7 +1523,7 @@ mod tests {
 
         // Get downstream dependencies of upstream
         let downstream_of_upstream = storage
-            .get_downstream_dependencies(upstream.id, &TenantId::new("tenant1"))
+            .get_downstream_dependencies(upstream.id, &tenant)
             .await
             .expect("Failed to get downstream dependencies");
 
@@ -1529,71 +1537,63 @@ mod tests {
     #[ignore]
     async fn test_asset_lineage() {
         let storage = setup_test_db().await.expect("Failed to setup test db");
+        let tenant = unique_tenant();
 
         // Create a chain: A -> B -> C
         let asset_a = AssetModel {
             id: Uuid::new_v4(),
-            name: "asset_a".to_string(),
+            name: unique_name("asset_a"),
             description: None,
             asset_type: "table".to_string(),
             owner: None,
             tags: Json(vec![]),
-            tenant_id: Some("tenant1".to_string()),
+            tenant_id: Some(tenant.as_str().to_string()),
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
 
         let asset_b = AssetModel {
             id: Uuid::new_v4(),
-            name: "asset_b".to_string(),
+            name: unique_name("asset_b"),
             description: None,
             asset_type: "table".to_string(),
             owner: None,
             tags: Json(vec![]),
-            tenant_id: Some("tenant1".to_string()),
+            tenant_id: Some(tenant.as_str().to_string()),
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
 
         let asset_c = AssetModel {
             id: Uuid::new_v4(),
-            name: "asset_c".to_string(),
+            name: unique_name("asset_c"),
             description: None,
             asset_type: "table".to_string(),
             owner: None,
             tags: Json(vec![]),
-            tenant_id: Some("tenant1".to_string()),
+            tenant_id: Some(tenant.as_str().to_string()),
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
 
-        storage
-            .create_asset(&asset_a, &TenantId::new("tenant1"))
-            .await
-            .unwrap();
-        storage
-            .create_asset(&asset_b, &TenantId::new("tenant1"))
-            .await
-            .unwrap();
-        storage
-            .create_asset(&asset_c, &TenantId::new("tenant1"))
-            .await
-            .unwrap();
+        storage.create_asset(&asset_a, &tenant).await.unwrap();
+        storage.create_asset(&asset_b, &tenant).await.unwrap();
+        storage.create_asset(&asset_c, &tenant).await.unwrap();
 
         // Create dependencies
         storage
-            .create_asset_dependency(asset_a.id, asset_b.id, "data", &TenantId::new("tenant1"))
+            .create_asset_dependency(asset_a.id, asset_b.id, "data", &tenant)
             .await
             .unwrap();
 
         storage
-            .create_asset_dependency(asset_b.id, asset_c.id, "data", &TenantId::new("tenant1"))
+            .create_asset_dependency(asset_b.id, asset_c.id, "data", &tenant)
             .await
             .unwrap();
 
         // Get lineage for asset_b (should include both A and C)
         let lineage = storage
-            .get_asset_lineage(asset_b.id, 10, &TenantId::new("tenant1"))
+            .get_asset_lineage(asset_b.id, 10, &tenant)
             .await
             .expect("Failed to get lineage");
 
