@@ -64,9 +64,13 @@ jobs:
           DATABASE_URL: postgresql://servo:servo@localhost:5432/servo_test
 
       - name: Run storage integration tests
+        # Tests run with servo_app role (NOBYPASSRLS) to validate RLS enforcement
+        # Sanity check: If you comment out RLS policies in 001_initial_schema.sql,
+        # test_rls_enforcement_comprehensive should FAIL (can't filter cross-tenant)
         run: cargo test --package servo-storage --all-features -- --ignored --test-threads=1
         env:
           TEST_DATABASE_URL: postgresql://servo:servo@localhost:5432/servo_test
+          TEST_APP_DATABASE_URL: postgresql://servo_app:servo_app@localhost:5432/servo_test
 
   security-audit:
     name: Security Audit
