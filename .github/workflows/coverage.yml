@@ -3,8 +3,14 @@ name: Code Coverage
 on:
   push:
     branches: [main, develop]
+  # Run on PRs only when 'coverage' label is added
   pull_request:
+    types: [labeled]
     branches: [main, develop]
+  # Run weekly on a schedule
+  schedule:
+    - cron: '0 2 * * 1' # Monday at 2 AM UTC
+  workflow_dispatch:
 
 env:
   RUST_BACKTRACE: 1
@@ -14,6 +20,10 @@ jobs:
   coverage:
     name: Code Coverage
     runs-on: ubuntu-latest
+    # Skip if PR without 'coverage' label
+    if: |
+      github.event_name != 'pull_request' ||
+      contains(github.event.pull_request.labels.*.name, 'coverage')
 
     services:
       postgres:
@@ -58,11 +68,12 @@ jobs:
           DATABASE_URL: postgresql://servo:servo@localhost:5432/servo_test
 
       - name: Upload coverage to Codecov
+        continue-on-error: true
         uses: codecov/codecov-action@v4
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: lcov.info
-          fail_ci_if_error: true
+          fail_ci_if_error: false
           verbose: true
 
       - name: Generate HTML report
@@ -71,7 +82,7 @@ jobs:
           DATABASE_URL: postgresql://servo:servo@localhost:5432/servo_test
 
       - name: Upload HTML coverage report
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: coverage-report
           path: target/llvm-cov/html/

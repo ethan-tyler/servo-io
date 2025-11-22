@@ -101,3 +101,21 @@ CREATE POLICY executions_tenant_isolation ON executions
 ALTER TABLE assets FORCE ROW LEVEL SECURITY;
 ALTER TABLE workflows FORCE ROW LEVEL SECURITY;
 ALTER TABLE executions FORCE ROW LEVEL SECURITY;
+
+-- Application role for RLS (non-owner, NOBYPASSRLS)
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'servo_app') THEN
+        CREATE ROLE servo_app LOGIN PASSWORD 'servo_app' NOBYPASSRLS;
+    END IF;
+END$$;
+
+-- Grant table privileges to the application role
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO servo_app;
+GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO servo_app;
+
+-- Ensure future tables/sequences also grant privileges to servo_app
+ALTER DEFAULT PRIVILEGES FOR ROLE CURRENT_USER IN SCHEMA public
+    GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO servo_app;
+ALTER DEFAULT PRIVILEGES FOR ROLE CURRENT_USER IN SCHEMA public
+    GRANT USAGE ON SEQUENCES TO servo_app;

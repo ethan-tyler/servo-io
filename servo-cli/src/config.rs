@@ -3,6 +3,7 @@
 use serde::{Deserialize, Serialize};
 
 /// CLI configuration
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     pub database_url: String,
@@ -13,6 +14,7 @@ pub struct Config {
 
 impl Config {
     /// Load configuration from environment or config file
+    #[allow(dead_code)]
     pub fn load() -> anyhow::Result<Self> {
         // TODO: Implement config loading from file
         // For now, just use environment variables

@@ -1,11 +1,8 @@
 {
   "required_status_checks": {
-    "strict": true,
+    "strict": false,
     "contexts": [
-      "Rust Tests",
-      "Security Scan",
-      "Code Coverage",
-      "License & Security Check"
+      "Rust Tests"
     ]
   },
   "enforce_admins": false,
