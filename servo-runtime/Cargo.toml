@@ -32,9 +32,14 @@ thiserror = { workspace = true }
 # Logging/tracing
 tracing = { workspace = true }
 
+# Random number generation (for retry jitter)
+rand = "0.8"
+
 # Internal dependencies
 servo-core = { path = "../servo-core" }
+servo-storage = { path = "../servo-storage" }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util", "macros"] }
 mockall = { workspace = true }
+sqlx = { workspace = true } # For integration tests that create test data
