@@ -103,8 +103,8 @@ impl PostgresStorage {
     {
         let mut tx = self.pool.begin().await?;
 
-        // Set tenant context for RLS enforcement
-        sqlx::query("SET LOCAL app.current_tenant = $1")
+        // Set tenant context for RLS enforcement. Use set_config to avoid SET parameter syntax issues.
+        sqlx::query("SELECT set_config('app.current_tenant', $1, true)")
             .bind(tenant_id.as_str())
             .execute(&mut *tx)
             .await?;
@@ -128,6 +128,7 @@ impl PostgresStorage {
     /// 1. Begins a new transaction
     /// 2. Executes the provided closure with the transaction
     /// 3. Commits on success, rolls back on error
+    #[allow(dead_code)]
     async fn with_transaction<F, T>(&self, f: F) -> Result<T>
     where
         F: for<'c> FnOnce(&'c mut Transaction<'_, Postgres>) -> BoxFuture<'c, Result<T>> + Send,
@@ -168,6 +169,17 @@ impl PostgresStorage {
             ));
         }
         Ok(())
+    }
+
+    /// Validate execution state
+    fn validate_execution_state(state: &str) -> Result<()> {
+        match state {
+            "pending" | "running" | "succeeded" | "failed" | "cancelled" | "timeout" => Ok(()),
+            _ => Err(crate::Error::ValidationError(format!(
+                "Invalid execution state: {}",
+                state
+            ))),
+        }
     }
 
     /// Validate that a string field is not empty
@@ -319,6 +331,7 @@ impl PostgresStorage {
         execution: &ExecutionModel,
         tenant_id: &TenantId,
     ) -> Result<()> {
+        Self::validate_execution_state(&execution.state)?;
         let execution = execution.clone();
         let tenant_str = tenant_id.as_str().to_string();
 
@@ -453,6 +466,7 @@ impl PostgresStorage {
         execution: &ExecutionModel,
         tenant_id: &TenantId,
     ) -> Result<()> {
+        Self::validate_execution_state(&execution.state)?;
         let execution = execution.clone();
 
         self.with_tenant_context(tenant_id, |tx| {
@@ -1043,12 +1057,13 @@ impl PostgresStorage {
     ) -> Result<Vec<crate::models::AssetDependencyModel>> {
         use std::collections::{HashSet, VecDeque};
 
-        let mut visited = HashSet::new();
+        let mut visited_assets = HashSet::new();
+        let mut visited_deps = HashSet::new();
         let mut queue = VecDeque::new();
         let mut lineage = Vec::new();
 
         queue.push_back((asset_id, 0));
-        visited.insert(asset_id);
+        visited_assets.insert(asset_id);
 
         while let Some((current_id, depth)) = queue.pop_front() {
             if depth >= max_depth {
@@ -1060,20 +1075,40 @@ impl PostgresStorage {
 
             // Add upstream dependencies to lineage
             for dep in upstream {
-                if !visited.contains(&dep.upstream_asset_id) {
-                    visited.insert(dep.upstream_asset_id);
+                // Track unique dependencies by (upstream, downstream, type)
+                let dep_key = (
+                    dep.upstream_asset_id,
+                    dep.downstream_asset_id,
+                    dep.dependency_type.clone(),
+                );
+                if visited_deps.insert(dep_key) {
+                    lineage.push(dep.clone());
+                }
+
+                // Queue unvisited assets for traversal
+                if !visited_assets.contains(&dep.upstream_asset_id) {
+                    visited_assets.insert(dep.upstream_asset_id);
                     queue.push_back((dep.upstream_asset_id, depth + 1));
                 }
-                lineage.push(dep);
             }
 
             // Add downstream dependencies to lineage
             for dep in downstream {
-                if !visited.contains(&dep.downstream_asset_id) {
-                    visited.insert(dep.downstream_asset_id);
+                // Track unique dependencies by (upstream, downstream, type)
+                let dep_key = (
+                    dep.upstream_asset_id,
+                    dep.downstream_asset_id,
+                    dep.dependency_type.clone(),
+                );
+                if visited_deps.insert(dep_key) {
+                    lineage.push(dep.clone());
+                }
+
+                // Queue unvisited assets for traversal
+                if !visited_assets.contains(&dep.downstream_asset_id) {
+                    visited_assets.insert(dep.downstream_asset_id);
                     queue.push_back((dep.downstream_asset_id, depth + 1));
                 }
-                lineage.push(dep);
             }
         }
 
@@ -1091,35 +1126,162 @@ impl PostgresStorage {
     }
 }
 
+fn map_db_error(err: sqlx::Error) -> crate::Error {
+    // Map connection-related errors
+    match &err {
+        sqlx::Error::PoolTimedOut => {
+            return crate::Error::PoolExhausted("Connection pool timed out".to_string());
+        }
+        sqlx::Error::PoolClosed => {
+            return crate::Error::ConnectionFailed("Connection pool closed".to_string());
+        }
+        _ => {}
+    }
+
+    // Map PostgreSQL-specific errors
+    if let sqlx::Error::Database(db_err) = &err {
+        if let Some(code) = db_err.code().as_deref() {
+            match code {
+                // unique_violation - duplicate key
+                "23505" => {
+                    return crate::Error::AlreadyExists(db_err.message().to_string());
+                }
+                // foreign_key_violation - referenced record doesn't exist
+                "23503" => {
+                    return crate::Error::NotFound(db_err.message().to_string());
+                }
+                // not_null_violation - required field is null
+                "23502" => {
+                    return crate::Error::ValidationError(format!(
+                        "Required field cannot be null: {}",
+                        db_err.message()
+                    ));
+                }
+                // check_violation - CHECK constraint failed
+                "23514" => {
+                    return crate::Error::ValidationError(format!(
+                        "Constraint violation: {}",
+                        db_err.message()
+                    ));
+                }
+                // too_many_connections - connection pool exhausted
+                "53300" => {
+                    return crate::Error::PoolExhausted(db_err.message().to_string());
+                }
+                // connection_failure - database connection failed
+                "08006" | "08001" | "08003" | "08004" => {
+                    return crate::Error::ConnectionFailed(db_err.message().to_string());
+                }
+                _ => {}
+            }
+        }
+    }
+
+    crate::Error::Database(err)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use chrono::Utc;
     use sqlx::types::Json;
 
-    /// Get test database URL from environment or use default
+    /// Get test database URL from environment or use default (owner role)
     fn get_test_database_url() -> String {
         std::env::var("TEST_DATABASE_URL")
             .unwrap_or_else(|_| "postgresql://servo:servo@localhost:5432/servo_test".to_string())
     }
 
-    /// Setup test database with migrations
-    async fn setup_test_db() -> Result<PostgresStorage> {
-        let db_url = get_test_database_url();
-        let storage = PostgresStorage::new(&db_url).await?;
+    /// Get test application database URL (non-owner, RLS enforced)
+    fn get_test_app_database_url() -> String {
+        std::env::var("TEST_APP_DATABASE_URL").unwrap_or_else(|_| {
+            "postgresql://servo_app:servo_app@localhost:5432/servo_test".to_string()
+        })
+    }
 
-        // Run migrations
-        crate::migrations::run_migrations(storage.pool()).await?;
+    /// Setup test database with migrations using owner role, then return storage connected as app role
+    async fn setup_test_db() -> Result<PostgresStorage> {
+        // Owner connection for DDL/migrations
+        let owner_url = get_test_database_url();
+        let owner_pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&owner_url)
+            .await?;
+
+        // Drop and recreate schema to ensure clean state across CI runs
+        sqlx::query("DROP SCHEMA public CASCADE")
+            .execute(&owner_pool)
+            .await?;
+        sqlx::query("CREATE SCHEMA public")
+            .execute(&owner_pool)
+            .await?;
+        sqlx::query("GRANT ALL ON SCHEMA public TO PUBLIC")
+            .execute(&owner_pool)
+            .await?;
+
+        // Run migrations (creates RLS policies and servo_app role/grants)
+        crate::migrations::run_migrations(&owner_pool).await?;
+
+        // Connect as app role for tests (RLS enforced)
+        let app_url = get_test_app_database_url();
+        let storage = PostgresStorage::new(&app_url).await?;
 
         Ok(storage)
     }
 
-    /// Clean up test data after each test
-    async fn cleanup_test_db(storage: &PostgresStorage) -> Result<()> {
-        sqlx::query("TRUNCATE assets, workflows, executions, asset_dependencies CASCADE")
-            .execute(storage.pool())
-            .await?;
-        Ok(())
+    fn unique_tenant() -> TenantId {
+        TenantId::new(uuid::Uuid::new_v4().to_string())
+    }
+
+    fn unique_name(prefix: &str) -> String {
+        format!("{}_{}", prefix, uuid::Uuid::new_v4())
+    }
+
+    /// Clean up all data for a specific tenant (tenant-scoped, preserves RLS)
+    async fn cleanup_tenant(storage: &PostgresStorage, tenant: &TenantId) -> Result<()> {
+        // Clone tenant string to satisfy 'static lifetime requirement of async move
+        let tenant_str = tenant.as_str().to_string();
+
+        // Delete in correct order to respect foreign keys
+        // asset_dependencies will cascade from assets
+        storage
+            .with_tenant_context(tenant, |tx| {
+                let tenant_str = tenant_str.clone();
+                Box::pin(async move {
+                    // Delete executions first (references workflows)
+                    sqlx::query("DELETE FROM executions WHERE tenant_id = $1")
+                        .bind(&tenant_str)
+                        .execute(&mut **tx)
+                        .await?;
+
+                    // Delete workflows
+                    sqlx::query("DELETE FROM workflows WHERE tenant_id = $1")
+                        .bind(&tenant_str)
+                        .execute(&mut **tx)
+                        .await?;
+
+                    // Delete asset_dependencies (will be deleted by cascade, but explicit is safer)
+                    sqlx::query(
+                        "DELETE FROM asset_dependencies WHERE id IN (
+                            SELECT ad.id FROM asset_dependencies ad
+                            JOIN assets a ON ad.upstream_asset_id = a.id
+                            WHERE a.tenant_id = $1
+                        )",
+                    )
+                    .bind(&tenant_str)
+                    .execute(&mut **tx)
+                    .await?;
+
+                    // Delete assets (this will cascade to asset_dependencies due to FK)
+                    sqlx::query("DELETE FROM assets WHERE tenant_id = $1")
+                        .bind(&tenant_str)
+                        .execute(&mut **tx)
+                        .await?;
+
+                    Ok(())
+                })
+            })
+            .await
     }
 
     #[test]
@@ -1130,32 +1292,48 @@ mod tests {
         assert!(PostgresStorage::validate_dependency_type("invalid").is_err());
     }
 
+    #[test]
+    fn test_validate_execution_state() {
+        for state in [
+            "pending",
+            "running",
+            "succeeded",
+            "failed",
+            "cancelled",
+            "timeout",
+        ] {
+            assert!(PostgresStorage::validate_execution_state(state).is_ok());
+        }
+        assert!(PostgresStorage::validate_execution_state("bogus").is_err());
+    }
+
     #[tokio::test]
     #[ignore] // Run with: cargo test -- --ignored
     async fn test_create_and_get_asset() {
         let storage = setup_test_db().await.expect("Failed to setup test db");
+        let tenant = unique_tenant();
 
         let asset = AssetModel {
             id: Uuid::new_v4(),
-            name: "test_asset".to_string(),
+            name: unique_name("test_asset"),
             description: Some("Test description".to_string()),
             asset_type: "table".to_string(),
             owner: Some("test_user".to_string()),
             tags: Json(vec!["tag1".to_string(), "tag2".to_string()]),
-            tenant_id: Some("tenant1".to_string()),
+            tenant_id: Some(tenant.as_str().to_string()),
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
 
         // Create asset
         storage
-            .create_asset(&asset, &TenantId::new("tenant1"))
+            .create_asset(&asset, &tenant)
             .await
             .expect("Failed to create asset");
 
         // Get asset
         let retrieved = storage
-            .get_asset(asset.id, &TenantId::new("tenant1"))
+            .get_asset(asset.id, &tenant)
             .await
             .expect("Failed to get asset");
 
@@ -1163,28 +1341,29 @@ mod tests {
         assert_eq!(retrieved.name, asset.name);
         assert_eq!(retrieved.description, asset.description);
 
-        cleanup_test_db(&storage).await.unwrap();
+        cleanup_tenant(&storage, &tenant).await.unwrap();
     }
 
     #[tokio::test]
     #[ignore]
     async fn test_update_asset() {
         let storage = setup_test_db().await.expect("Failed to setup test db");
+        let tenant = unique_tenant();
 
         let mut asset = AssetModel {
             id: Uuid::new_v4(),
-            name: "test_asset".to_string(),
+            name: unique_name("test_asset"),
             description: Some("Original description".to_string()),
             asset_type: "table".to_string(),
             owner: Some("test_user".to_string()),
             tags: Json(vec![]),
-            tenant_id: Some("tenant1".to_string()),
+            tenant_id: Some(tenant.as_str().to_string()),
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
 
         storage
-            .create_asset(&asset, &TenantId::new("tenant1"))
+            .create_asset(&asset, &tenant)
             .await
             .expect("Failed to create asset");
 
@@ -1193,13 +1372,13 @@ mod tests {
         asset.updated_at = Utc::now();
 
         storage
-            .update_asset(&asset, &TenantId::new("tenant1"))
+            .update_asset(&asset, &tenant)
             .await
             .expect("Failed to update asset");
 
         // Verify update
         let retrieved = storage
-            .get_asset(asset.id, &TenantId::new("tenant1"))
+            .get_asset(asset.id, &tenant)
             .await
             .expect("Failed to get asset");
 
@@ -1207,79 +1386,79 @@ mod tests {
             retrieved.description,
             Some("Updated description".to_string())
         );
-
-        cleanup_test_db(&storage).await.unwrap();
+        cleanup_tenant(&storage, &tenant).await.unwrap();
     }
 
     #[tokio::test]
     #[ignore]
     async fn test_delete_asset() {
         let storage = setup_test_db().await.expect("Failed to setup test db");
+        let tenant = unique_tenant();
 
         let asset = AssetModel {
             id: Uuid::new_v4(),
-            name: "test_asset".to_string(),
+            name: unique_name("test_asset"),
             description: None,
             asset_type: "table".to_string(),
             owner: None,
             tags: Json(vec![]),
-            tenant_id: Some("tenant1".to_string()),
+            tenant_id: Some(tenant.as_str().to_string()),
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
 
         storage
-            .create_asset(&asset, &TenantId::new("tenant1"))
+            .create_asset(&asset, &tenant)
             .await
             .expect("Failed to create asset");
 
         // Delete asset
         storage
-            .delete_asset(asset.id, &TenantId::new("tenant1"))
+            .delete_asset(asset.id, &tenant)
             .await
             .expect("Failed to delete asset");
 
         // Verify deletion
-        let result = storage.get_asset(asset.id, &TenantId::new("tenant1")).await;
+        let result = storage.get_asset(asset.id, &tenant).await;
 
         assert!(result.is_err());
-
-        cleanup_test_db(&storage).await.unwrap();
+        cleanup_tenant(&storage, &tenant).await.unwrap();
     }
 
     #[tokio::test]
     #[ignore]
     async fn test_list_assets_with_pagination() {
         let storage = setup_test_db().await.expect("Failed to setup test db");
+        let tenant = unique_tenant();
 
         // Create multiple assets
         for i in 0..5 {
             let asset = AssetModel {
                 id: Uuid::new_v4(),
-                name: format!("asset_{}", i),
+                name: unique_name(&format!("asset_{}", i)),
                 description: None,
                 asset_type: "table".to_string(),
                 owner: None,
                 tags: Json(vec![]),
-                tenant_id: Some("tenant1".to_string()),
+                tenant_id: Some(tenant.as_str().to_string()),
                 created_at: Utc::now(),
                 updated_at: Utc::now(),
             };
 
             storage
-                .create_asset(&asset, &TenantId::new("tenant1"))
+                .create_asset(&asset, &tenant)
                 .await
                 .expect("Failed to create asset");
         }
 
         // List with pagination
         let page1 = storage
-            .list_assets(&TenantId::new("tenant1"), 2, 0)
+            .list_assets(&tenant, 2, 0)
             .await
             .expect("Failed to list assets");
 
         let page2 = storage
-            .list_assets(&TenantId::new("tenant1"), 2, 2)
+            .list_assets(&tenant, 2, 2)
             .await
             .expect("Failed to list assets");
 
@@ -1288,13 +1467,12 @@ mod tests {
 
         // Verify total count
         let count = storage
-            .count_assets(&TenantId::new("tenant1"))
+            .count_assets(&tenant)
             .await
             .expect("Failed to count assets");
 
         assert_eq!(count, 5);
-
-        cleanup_test_db(&storage).await.unwrap();
+        cleanup_tenant(&storage, &tenant).await.unwrap();
     }
 
     #[tokio::test]
@@ -1302,119 +1480,115 @@ mod tests {
     async fn test_tenant_isolation() {
         let storage = setup_test_db().await.expect("Failed to setup test db");
 
+        let tenant1 = unique_tenant();
+        let tenant2 = unique_tenant();
+
         // Create assets for tenant1
         let asset1 = AssetModel {
             id: Uuid::new_v4(),
-            name: "tenant1_asset".to_string(),
+            name: unique_name("tenant1_asset"),
             description: None,
             asset_type: "table".to_string(),
             owner: None,
             tags: Json(vec![]),
-            tenant_id: Some("tenant1".to_string()),
+            tenant_id: Some(tenant1.as_str().to_string()),
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
 
         storage
-            .create_asset(&asset1, &TenantId::new("tenant1"))
+            .create_asset(&asset1, &tenant1)
             .await
             .expect("Failed to create asset for tenant1");
 
         // Create assets for tenant2
         let asset2 = AssetModel {
             id: Uuid::new_v4(),
-            name: "tenant2_asset".to_string(),
+            name: unique_name("tenant2_asset"),
             description: None,
             asset_type: "table".to_string(),
             owner: None,
             tags: Json(vec![]),
-            tenant_id: Some("tenant2".to_string()),
+            tenant_id: Some(tenant2.as_str().to_string()),
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
 
         storage
-            .create_asset(&asset2, &TenantId::new("tenant2"))
+            .create_asset(&asset2, &tenant2)
             .await
             .expect("Failed to create asset for tenant2");
 
         // Tenant1 should only see their asset
         let tenant1_assets = storage
-            .list_assets(&TenantId::new("tenant1"), 100, 0)
+            .list_assets(&tenant1, 100, 0)
             .await
             .expect("Failed to list tenant1 assets");
 
         assert_eq!(tenant1_assets.len(), 1);
-        assert_eq!(tenant1_assets[0].name, "tenant1_asset");
+        assert_eq!(tenant1_assets[0].id, asset1.id);
 
         // Tenant2 should only see their asset
         let tenant2_assets = storage
-            .list_assets(&TenantId::new("tenant2"), 100, 0)
+            .list_assets(&tenant2, 100, 0)
             .await
             .expect("Failed to list tenant2 assets");
 
         assert_eq!(tenant2_assets.len(), 1);
-        assert_eq!(tenant2_assets[0].name, "tenant2_asset");
+        assert_eq!(tenant2_assets[0].id, asset2.id);
 
         // Tenant1 should not be able to access tenant2's asset
-        let result = storage
-            .get_asset(asset2.id, &TenantId::new("tenant1"))
-            .await;
+        let result = storage.get_asset(asset2.id, &tenant1).await;
 
         assert!(result.is_err());
-
-        cleanup_test_db(&storage).await.unwrap();
+        cleanup_tenant(&storage, &tenant1).await.unwrap();
     }
 
     #[tokio::test]
     #[ignore]
     async fn test_asset_dependencies() {
         let storage = setup_test_db().await.expect("Failed to setup test db");
+        let tenant = unique_tenant();
 
         // Create upstream asset
         let upstream = AssetModel {
             id: Uuid::new_v4(),
-            name: "upstream".to_string(),
+            name: unique_name("upstream"),
             description: None,
             asset_type: "table".to_string(),
             owner: None,
             tags: Json(vec![]),
-            tenant_id: Some("tenant1".to_string()),
+            tenant_id: Some(tenant.as_str().to_string()),
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
 
         storage
-            .create_asset(&upstream, &TenantId::new("tenant1"))
+            .create_asset(&upstream, &tenant)
             .await
             .expect("Failed to create upstream asset");
 
         // Create downstream asset
         let downstream = AssetModel {
             id: Uuid::new_v4(),
-            name: "downstream".to_string(),
+            name: unique_name("downstream"),
             description: None,
             asset_type: "table".to_string(),
             owner: None,
             tags: Json(vec![]),
-            tenant_id: Some("tenant1".to_string()),
+            tenant_id: Some(tenant.as_str().to_string()),
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
 
         storage
-            .create_asset(&downstream, &TenantId::new("tenant1"))
+            .create_asset(&downstream, &tenant)
             .await
             .expect("Failed to create downstream asset");
 
         // Create dependency
         let dep_id = storage
-            .create_asset_dependency(
-                upstream.id,
-                downstream.id,
-                "data",
-                &TenantId::new("tenant1"),
-            )
+            .create_asset_dependency(upstream.id, downstream.id, "data", &tenant)
             .await
             .expect("Failed to create dependency");
 
@@ -1422,7 +1596,7 @@ mod tests {
 
         // Get dependencies
         let (upstream_deps, _downstream_deps) = storage
-            .get_asset_dependencies(downstream.id, &TenantId::new("tenant1"))
+            .get_asset_dependencies(downstream.id, &tenant)
             .await
             .expect("Failed to get dependencies");
 
@@ -1432,14 +1606,13 @@ mod tests {
 
         // Get downstream dependencies of upstream
         let downstream_of_upstream = storage
-            .get_downstream_dependencies(upstream.id, &TenantId::new("tenant1"))
+            .get_downstream_dependencies(upstream.id, &tenant)
             .await
             .expect("Failed to get downstream dependencies");
 
         assert_eq!(downstream_of_upstream.len(), 1);
         assert_eq!(downstream_of_upstream[0].downstream_asset_id, downstream.id);
-
-        cleanup_test_db(&storage).await.unwrap();
+        cleanup_tenant(&storage, &tenant).await.unwrap();
     }
 
     #[tokio::test]
@@ -1447,76 +1620,68 @@ mod tests {
     async fn test_asset_lineage() {
         let storage = setup_test_db().await.expect("Failed to setup test db");
 
+        let tenant = unique_tenant();
+
         // Create a chain: A -> B -> C
         let asset_a = AssetModel {
             id: Uuid::new_v4(),
-            name: "asset_a".to_string(),
+            name: unique_name("asset_a"),
             description: None,
             asset_type: "table".to_string(),
             owner: None,
             tags: Json(vec![]),
-            tenant_id: Some("tenant1".to_string()),
+            tenant_id: Some(tenant.as_str().to_string()),
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
 
         let asset_b = AssetModel {
             id: Uuid::new_v4(),
-            name: "asset_b".to_string(),
+            name: unique_name("asset_b"),
             description: None,
             asset_type: "table".to_string(),
             owner: None,
             tags: Json(vec![]),
-            tenant_id: Some("tenant1".to_string()),
+            tenant_id: Some(tenant.as_str().to_string()),
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
 
         let asset_c = AssetModel {
             id: Uuid::new_v4(),
-            name: "asset_c".to_string(),
+            name: unique_name("asset_c"),
             description: None,
             asset_type: "table".to_string(),
             owner: None,
             tags: Json(vec![]),
-            tenant_id: Some("tenant1".to_string()),
+            tenant_id: Some(tenant.as_str().to_string()),
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
 
-        storage
-            .create_asset(&asset_a, &TenantId::new("tenant1"))
-            .await
-            .unwrap();
-        storage
-            .create_asset(&asset_b, &TenantId::new("tenant1"))
-            .await
-            .unwrap();
-        storage
-            .create_asset(&asset_c, &TenantId::new("tenant1"))
-            .await
-            .unwrap();
+        storage.create_asset(&asset_a, &tenant).await.unwrap();
+        storage.create_asset(&asset_b, &tenant).await.unwrap();
+        storage.create_asset(&asset_c, &tenant).await.unwrap();
 
         // Create dependencies
         storage
-            .create_asset_dependency(asset_a.id, asset_b.id, "data", &TenantId::new("tenant1"))
+            .create_asset_dependency(asset_a.id, asset_b.id, "data", &tenant)
             .await
             .unwrap();
 
         storage
-            .create_asset_dependency(asset_b.id, asset_c.id, "data", &TenantId::new("tenant1"))
+            .create_asset_dependency(asset_b.id, asset_c.id, "data", &tenant)
             .await
             .unwrap();
 
         // Get lineage for asset_b (should include both A and C)
         let lineage = storage
-            .get_asset_lineage(asset_b.id, 10, &TenantId::new("tenant1"))
+            .get_asset_lineage(asset_b.id, 10, &tenant)
             .await
             .expect("Failed to get lineage");
 
         assert_eq!(lineage.len(), 2);
-
-        cleanup_test_db(&storage).await.unwrap();
+        cleanup_tenant(&storage, &tenant).await.unwrap();
     }
 
     #[tokio::test]
@@ -1557,8 +1722,9 @@ mod tests {
             .expect("Failed to list workflows");
 
         assert_eq!(workflows.len(), 1);
-
-        cleanup_test_db(&storage).await.unwrap();
+        cleanup_tenant(&storage, &TenantId::new("tenant1"))
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
@@ -1617,8 +1783,9 @@ mod tests {
             .expect("Failed to list executions");
 
         assert_eq!(executions.len(), 1);
-
-        cleanup_test_db(&storage).await.unwrap();
+        cleanup_tenant(&storage, &TenantId::new("tenant1"))
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
@@ -1736,61 +1903,8 @@ mod tests {
             .expect("Tenant2 should be able to access their own asset");
 
         assert_eq!(asset2_valid.id, asset2.id);
-
-        cleanup_test_db(&storage).await.unwrap();
+        cleanup_tenant(&storage, &TenantId::new("tenant1"))
+            .await
+            .unwrap();
     }
-}
-
-fn map_db_error(err: sqlx::Error) -> crate::Error {
-    // Map connection-related errors
-    match &err {
-        sqlx::Error::PoolTimedOut => {
-            return crate::Error::PoolExhausted("Connection pool timed out".to_string());
-        }
-        sqlx::Error::PoolClosed => {
-            return crate::Error::ConnectionFailed("Connection pool closed".to_string());
-        }
-        _ => {}
-    }
-
-    // Map PostgreSQL-specific errors
-    if let sqlx::Error::Database(db_err) = &err {
-        if let Some(code) = db_err.code().as_deref() {
-            match code {
-                // unique_violation - duplicate key
-                "23505" => {
-                    return crate::Error::AlreadyExists(db_err.message().to_string());
-                }
-                // foreign_key_violation - referenced record doesn't exist
-                "23503" => {
-                    return crate::Error::NotFound(db_err.message().to_string());
-                }
-                // not_null_violation - required field is null
-                "23502" => {
-                    return crate::Error::ValidationError(format!(
-                        "Required field cannot be null: {}",
-                        db_err.message()
-                    ));
-                }
-                // check_violation - CHECK constraint failed
-                "23514" => {
-                    return crate::Error::ValidationError(format!(
-                        "Constraint violation: {}",
-                        db_err.message()
-                    ));
-                }
-                // too_many_connections - connection pool exhausted
-                "53300" => {
-                    return crate::Error::PoolExhausted(db_err.message().to_string());
-                }
-                // connection_failure - database connection failed
-                "08006" | "08001" | "08003" | "08004" => {
-                    return crate::Error::ConnectionFailed(db_err.message().to_string());
-                }
-                _ => {}
-            }
-        }
-    }
-
-    crate::Error::Database(err)
 }

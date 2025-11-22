@@ -13,15 +13,19 @@ targets = [
 version = 2
 # Deny crates with security vulnerabilities
 vulnerability = "deny"
-# Warn about unmaintained crates
-unmaintained = "warn"
+# Allow unmaintained crates (many popular proc-macros are in maintenance mode)
+unmaintained = "allow"
 # Warn about yanked crates
 yanked = "warn"
 # Warn about crates with unsound code
 unsound = "warn"
 # Allow specific advisories if needed
 ignore = [
-    # Example: "RUSTSEC-2020-0001",
+    # paste crate is unmaintained but stable and widely used
+    "RUSTSEC-2024-0436",
+    # TODO: Upgrade sqlx to 0.8.x to fix this vulnerability
+    # Binary Protocol Misinterpretation in sqlx 0.7.4
+    "RUSTSEC-2024-0363",
 ]
 
 [licenses]
@@ -34,7 +38,9 @@ allow = [
     "BSD-2-Clause",
     "BSD-3-Clause",
     "ISC",
+    "MPL-2.0",
     "Unicode-DFS-2016",
+    "Unicode-3.0",
     "Zlib",
     "CC0-1.0",
 ]

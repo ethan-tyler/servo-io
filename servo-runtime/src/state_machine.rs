@@ -66,11 +66,10 @@ impl StateMachine {
     fn is_valid_transition(&self, new_state: ExecutionState) -> bool {
         use ExecutionState::*;
 
-        match (self.current_state, new_state) {
-            (Pending, Running) => true,
-            (Running, Succeeded | Failed | Cancelled | Timeout) => true,
-            _ => false,
-        }
+        matches!(
+            (self.current_state, new_state),
+            (Pending, Running) | (Running, Succeeded | Failed | Cancelled | Timeout)
+        )
     }
 
     /// Get the state history
