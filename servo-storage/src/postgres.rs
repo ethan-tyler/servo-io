@@ -1226,9 +1226,6 @@ mod tests {
         let app_url = get_test_app_database_url();
         let storage = PostgresStorage::new(&app_url).await?;
 
-        // Clean any leftover data from previous test runs
-        cleanup_test_db(&storage).await?;
-
         Ok(storage)
     }
 

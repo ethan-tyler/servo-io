@@ -68,8 +68,8 @@ jobs:
         env:
           TEST_DATABASE_URL: postgresql://servo:servo@localhost:5432/servo_test
 
-  security-scan:
-    name: Security Scan
+  security-audit:
+    name: Security Audit
     runs-on: ubuntu-latest
     # Only run on push to main, not on PRs (use scheduled workflow instead)
     if: github.event_name == 'push'
