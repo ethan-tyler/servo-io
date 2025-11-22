@@ -1190,6 +1190,49 @@ mod tests {
         format!("{}_{}", prefix, uuid::Uuid::new_v4())
     }
 
+    /// Clean up all data for a specific tenant (tenant-scoped, preserves RLS)
+    async fn cleanup_tenant(storage: &PostgresStorage, tenant: &TenantId) -> Result<()> {
+        // Delete in correct order to respect foreign keys
+        // asset_dependencies will cascade from assets
+        storage
+            .with_tenant_context(tenant, |tx| {
+                Box::pin(async move {
+                    // Delete executions first (references workflows)
+                    sqlx::query("DELETE FROM executions WHERE tenant_id = $1")
+                        .bind(tenant.as_str())
+                        .execute(&mut **tx)
+                        .await?;
+
+                    // Delete workflows
+                    sqlx::query("DELETE FROM workflows WHERE tenant_id = $1")
+                        .bind(tenant.as_str())
+                        .execute(&mut **tx)
+                        .await?;
+
+                    // Delete asset_dependencies (will be deleted by cascade, but explicit is safer)
+                    sqlx::query(
+                        "DELETE FROM asset_dependencies WHERE id IN (
+                            SELECT ad.id FROM asset_dependencies ad
+                            JOIN assets a ON ad.upstream_asset_id = a.id
+                            WHERE a.tenant_id = $1
+                        )",
+                    )
+                    .bind(tenant.as_str())
+                    .execute(&mut **tx)
+                    .await?;
+
+                    // Delete assets (this will cascade to asset_dependencies due to FK)
+                    sqlx::query("DELETE FROM assets WHERE tenant_id = $1")
+                        .bind(tenant.as_str())
+                        .execute(&mut **tx)
+                        .await?;
+
+                    Ok(())
+                })
+            })
+            .await
+    }
+
     #[test]
     fn test_validate_dependency_type() {
         assert!(PostgresStorage::validate_dependency_type("data").is_ok());
@@ -1246,6 +1289,8 @@ mod tests {
         assert_eq!(retrieved.id, asset.id);
         assert_eq!(retrieved.name, asset.name);
         assert_eq!(retrieved.description, asset.description);
+
+        cleanup_tenant(&storage, &tenant).await.unwrap();
     }
 
     #[tokio::test]
@@ -1290,6 +1335,7 @@ mod tests {
             retrieved.description,
             Some("Updated description".to_string())
         );
+        cleanup_tenant(&storage, &tenant).await.unwrap();
     }
 
     #[tokio::test]
@@ -1325,6 +1371,7 @@ mod tests {
         let result = storage.get_asset(asset.id, &tenant).await;
 
         assert!(result.is_err());
+        cleanup_tenant(&storage, &tenant).await.unwrap();
     }
 
     #[tokio::test]
@@ -1374,6 +1421,7 @@ mod tests {
             .expect("Failed to count assets");
 
         assert_eq!(count, 5);
+        cleanup_tenant(&storage, &tenant).await.unwrap();
     }
 
     #[tokio::test]
@@ -1442,6 +1490,7 @@ mod tests {
         let result = storage.get_asset(asset2.id, &tenant1).await;
 
         assert!(result.is_err());
+        cleanup_tenant(&storage, &tenant1).await.unwrap();
     }
 
     #[tokio::test]
@@ -1512,6 +1561,7 @@ mod tests {
 
         assert_eq!(downstream_of_upstream.len(), 1);
         assert_eq!(downstream_of_upstream[0].downstream_asset_id, downstream.id);
+        cleanup_tenant(&storage, &tenant).await.unwrap();
     }
 
     #[tokio::test]
@@ -1580,6 +1630,7 @@ mod tests {
             .expect("Failed to get lineage");
 
         assert_eq!(lineage.len(), 2);
+        cleanup_tenant(&storage, &tenant).await.unwrap();
     }
 
     #[tokio::test]
@@ -1620,6 +1671,9 @@ mod tests {
             .expect("Failed to list workflows");
 
         assert_eq!(workflows.len(), 1);
+        cleanup_tenant(&storage, &TenantId::new("tenant1"))
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
@@ -1678,6 +1732,9 @@ mod tests {
             .expect("Failed to list executions");
 
         assert_eq!(executions.len(), 1);
+        cleanup_tenant(&storage, &TenantId::new("tenant1"))
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
@@ -1795,5 +1852,8 @@ mod tests {
             .expect("Tenant2 should be able to access their own asset");
 
         assert_eq!(asset2_valid.id, asset2.id);
+        cleanup_tenant(&storage, &TenantId::new("tenant1"))
+            .await
+            .unwrap();
     }
 }
