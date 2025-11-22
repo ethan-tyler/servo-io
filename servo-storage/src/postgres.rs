@@ -1284,6 +1284,14 @@ mod tests {
             .await
     }
 
+    fn unique_tenant() -> TenantId {
+        TenantId::new(uuid::Uuid::new_v4().to_string())
+    }
+
+    fn unique_name(prefix: &str) -> String {
+        format!("{}_{}", prefix, uuid::Uuid::new_v4())
+    }
+
     #[test]
     fn test_validate_dependency_type() {
         assert!(PostgresStorage::validate_dependency_type("data").is_ok());
@@ -1479,6 +1487,8 @@ mod tests {
     #[ignore]
     async fn test_tenant_isolation() {
         let storage = setup_test_db().await.expect("Failed to setup test db");
+        let tenant1 = unique_tenant();
+        let tenant2 = unique_tenant();
 
         let tenant1 = unique_tenant();
         let tenant2 = unique_tenant();
@@ -1619,6 +1629,7 @@ mod tests {
     #[ignore]
     async fn test_asset_lineage() {
         let storage = setup_test_db().await.expect("Failed to setup test db");
+        let tenant = unique_tenant();
 
         let tenant = unique_tenant();
 
