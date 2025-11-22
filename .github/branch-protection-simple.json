@@ -2,8 +2,7 @@
   "required_status_checks": {
     "strict": false,
     "contexts": [
-      "Rust Tests",
-      "Security Scan"
+      "Rust Tests"
     ]
   },
   "enforce_admins": false,

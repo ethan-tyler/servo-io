@@ -1415,7 +1415,9 @@ mod tests {
     #[ignore]
     async fn test_tenant_isolation() {
         let storage = setup_test_db().await.expect("Failed to setup test db");
-        cleanup_test_db(&storage).await.expect("Failed to cleanup before test");
+        cleanup_test_db(&storage)
+            .await
+            .expect("Failed to cleanup before test");
 
         let tenant1 = unique_tenant();
         let tenant2 = unique_tenant();
@@ -1558,7 +1560,9 @@ mod tests {
     #[ignore]
     async fn test_asset_lineage() {
         let storage = setup_test_db().await.expect("Failed to setup test db");
-        cleanup_test_db(&storage).await.expect("Failed to cleanup before test");
+        cleanup_test_db(&storage)
+            .await
+            .expect("Failed to cleanup before test");
 
         let tenant = unique_tenant();
 
@@ -1731,7 +1735,9 @@ mod tests {
     #[ignore]
     async fn test_rls_enforcement_comprehensive() {
         let storage = setup_test_db().await.expect("Failed to setup test db");
-        cleanup_test_db(&storage).await.expect("Failed to cleanup before test");
+        cleanup_test_db(&storage)
+            .await
+            .expect("Failed to cleanup before test");
 
         // Create asset for tenant1
         let asset1 = AssetModel {

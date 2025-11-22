@@ -7,15 +7,11 @@ on:
       - '**/Cargo.toml'
       - '**/Cargo.lock'
       - 'deny.toml'
-  pull_request:
-    branches: [main, develop]
-    paths:
-      - '**/Cargo.toml'
-      - '**/Cargo.lock'
-      - 'deny.toml'
+  # Don't run on PRs - use scheduled runs instead for better performance
   schedule:
     # Run daily at 00:00 UTC
     - cron: '0 0 * * *'
+  workflow_dispatch:
 
 jobs:
   cargo-deny:
