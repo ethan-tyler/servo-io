@@ -1312,7 +1312,6 @@ mod tests {
         assert_eq!(retrieved.name, asset.name);
         assert_eq!(retrieved.description, asset.description);
 
-        cleanup_test_db(&storage).await.unwrap();
     }
 
     #[tokio::test]
@@ -1358,7 +1357,6 @@ mod tests {
             Some("Updated description".to_string())
         );
 
-        cleanup_test_db(&storage).await.unwrap();
     }
 
     #[tokio::test]
@@ -1395,7 +1393,6 @@ mod tests {
 
         assert!(result.is_err());
 
-        cleanup_test_db(&storage).await.unwrap();
     }
 
     #[tokio::test]
@@ -1446,7 +1443,6 @@ mod tests {
 
         assert_eq!(count, 5);
 
-        cleanup_test_db(&storage).await.unwrap();
     }
 
     #[tokio::test]
@@ -1516,7 +1512,6 @@ mod tests {
 
         assert!(result.is_err());
 
-        cleanup_test_db(&storage).await.unwrap();
     }
 
     #[tokio::test]
@@ -1588,7 +1583,6 @@ mod tests {
         assert_eq!(downstream_of_upstream.len(), 1);
         assert_eq!(downstream_of_upstream[0].downstream_asset_id, downstream.id);
 
-        cleanup_test_db(&storage).await.unwrap();
     }
 
     #[tokio::test]
@@ -1658,7 +1652,6 @@ mod tests {
 
         assert_eq!(lineage.len(), 2);
 
-        cleanup_test_db(&storage).await.unwrap();
     }
 
     #[tokio::test]
@@ -1700,7 +1693,6 @@ mod tests {
 
         assert_eq!(workflows.len(), 1);
 
-        cleanup_test_db(&storage).await.unwrap();
     }
 
     #[tokio::test]
@@ -1760,7 +1752,6 @@ mod tests {
 
         assert_eq!(executions.len(), 1);
 
-        cleanup_test_db(&storage).await.unwrap();
     }
 
     #[tokio::test]
@@ -1879,6 +1870,5 @@ mod tests {
 
         assert_eq!(asset2_valid.id, asset2.id);
 
-        cleanup_test_db(&storage).await.unwrap();
     }
 }
