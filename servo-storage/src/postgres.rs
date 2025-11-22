@@ -1192,20 +1192,24 @@ mod tests {
 
     /// Clean up all data for a specific tenant (tenant-scoped, preserves RLS)
     async fn cleanup_tenant(storage: &PostgresStorage, tenant: &TenantId) -> Result<()> {
+        // Clone tenant string to satisfy 'static lifetime requirement of async move
+        let tenant_str = tenant.as_str().to_string();
+
         // Delete in correct order to respect foreign keys
         // asset_dependencies will cascade from assets
         storage
             .with_tenant_context(tenant, |tx| {
+                let tenant_str = tenant_str.clone();
                 Box::pin(async move {
                     // Delete executions first (references workflows)
                     sqlx::query("DELETE FROM executions WHERE tenant_id = $1")
-                        .bind(tenant.as_str())
+                        .bind(&tenant_str)
                         .execute(&mut **tx)
                         .await?;
 
                     // Delete workflows
                     sqlx::query("DELETE FROM workflows WHERE tenant_id = $1")
-                        .bind(tenant.as_str())
+                        .bind(&tenant_str)
                         .execute(&mut **tx)
                         .await?;
 
@@ -1217,13 +1221,13 @@ mod tests {
                             WHERE a.tenant_id = $1
                         )",
                     )
-                    .bind(tenant.as_str())
+                    .bind(&tenant_str)
                     .execute(&mut **tx)
                     .await?;
 
                     // Delete assets (this will cascade to asset_dependencies due to FK)
                     sqlx::query("DELETE FROM assets WHERE tenant_id = $1")
-                        .bind(tenant.as_str())
+                        .bind(&tenant_str)
                         .execute(&mut **tx)
                         .await?;
 
