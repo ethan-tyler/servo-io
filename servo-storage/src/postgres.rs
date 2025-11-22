@@ -1057,12 +1057,13 @@ impl PostgresStorage {
     ) -> Result<Vec<crate::models::AssetDependencyModel>> {
         use std::collections::{HashSet, VecDeque};
 
-        let mut visited = HashSet::new();
+        let mut visited_assets = HashSet::new();
+        let mut visited_deps = HashSet::new();
         let mut queue = VecDeque::new();
         let mut lineage = Vec::new();
 
         queue.push_back((asset_id, 0));
-        visited.insert(asset_id);
+        visited_assets.insert(asset_id);
 
         while let Some((current_id, depth)) = queue.pop_front() {
             if depth >= max_depth {
@@ -1074,20 +1075,32 @@ impl PostgresStorage {
 
             // Add upstream dependencies to lineage
             for dep in upstream {
-                if !visited.contains(&dep.upstream_asset_id) {
-                    visited.insert(dep.upstream_asset_id);
+                // Track unique dependencies by (upstream, downstream, type)
+                let dep_key = (dep.upstream_asset_id, dep.downstream_asset_id, dep.dependency_type.clone());
+                if visited_deps.insert(dep_key) {
+                    lineage.push(dep.clone());
+                }
+
+                // Queue unvisited assets for traversal
+                if !visited_assets.contains(&dep.upstream_asset_id) {
+                    visited_assets.insert(dep.upstream_asset_id);
                     queue.push_back((dep.upstream_asset_id, depth + 1));
                 }
-                lineage.push(dep);
             }
 
             // Add downstream dependencies to lineage
             for dep in downstream {
-                if !visited.contains(&dep.downstream_asset_id) {
-                    visited.insert(dep.downstream_asset_id);
+                // Track unique dependencies by (upstream, downstream, type)
+                let dep_key = (dep.upstream_asset_id, dep.downstream_asset_id, dep.dependency_type.clone());
+                if visited_deps.insert(dep_key) {
+                    lineage.push(dep.clone());
+                }
+
+                // Queue unvisited assets for traversal
+                if !visited_assets.contains(&dep.downstream_asset_id) {
+                    visited_assets.insert(dep.downstream_asset_id);
                     queue.push_back((dep.downstream_asset_id, depth + 1));
                 }
-                lineage.push(dep);
             }
         }
 
