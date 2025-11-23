@@ -36,7 +36,7 @@ use servo_storage::PostgresStorage;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::signal;
-use tower_http::{timeout::TimeoutLayer, trace::TraceLayer};
+use tower_http::{limit::RequestBodyLimitLayer, timeout::TimeoutLayer, trace::TraceLayer};
 use tracing::{error, info};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -110,12 +110,13 @@ async fn main() {
         oidc_validator,
     };
 
-    // Build router
+    // Build router with security hardening
     let app = Router::new()
         .route("/execute", post(execute_handler))
         .route("/health", get(health_handler))
         .layer(TraceLayer::new_for_http())
         .layer(TimeoutLayer::new(Duration::from_secs(610))) // Slightly longer than execution timeout
+        .layer(RequestBodyLimitLayer::new(10 * 1024 * 1024)) // 10MB max request body
         .with_state(state);
 
     // Start server
