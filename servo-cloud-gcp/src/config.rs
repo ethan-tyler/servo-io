@@ -17,19 +17,19 @@ pub struct GcpConfig {
 impl GcpConfig {
     pub fn from_env() -> Result<Self> {
         let project_id = std::env::var("GCP_PROJECT_ID")
-            .map_err(|_| Error::Configuration("GCP_PROJECT_ID not set".into()))?;
+            .map_err(|_| Error::Config("GCP_PROJECT_ID not set".into()))?;
         let location = std::env::var("GCP_LOCATION")
-            .map_err(|_| Error::Configuration("GCP_LOCATION not set".into()))?;
+            .map_err(|_| Error::Config("GCP_LOCATION not set".into()))?;
         let queue_name = std::env::var("GCP_QUEUE_NAME")
-            .map_err(|_| Error::Configuration("GCP_QUEUE_NAME not set".into()))?;
+            .map_err(|_| Error::Config("GCP_QUEUE_NAME not set".into()))?;
         let worker_url = std::env::var("GCP_WORKER_URL")
-            .map_err(|_| Error::Configuration("GCP_WORKER_URL not set".into()))?;
+            .map_err(|_| Error::Config("GCP_WORKER_URL not set".into()))?;
         let service_account_email = std::env::var("GCP_SERVICE_ACCOUNT_EMAIL")
-            .map_err(|_| Error::Configuration("GCP_SERVICE_ACCOUNT_EMAIL not set".into()))?;
+            .map_err(|_| Error::Config("GCP_SERVICE_ACCOUNT_EMAIL not set".into()))?;
         let service_account_key_json = std::env::var("GCP_SERVICE_ACCOUNT_KEY_JSON")
-            .map_err(|_| Error::Configuration("GCP_SERVICE_ACCOUNT_KEY_JSON not set".into()))?;
+            .map_err(|_| Error::Config("GCP_SERVICE_ACCOUNT_KEY_JSON not set".into()))?;
         let hmac_secret = std::env::var("SERVO_HMAC_SECRET")
-            .map_err(|_| Error::Configuration("SERVO_HMAC_SECRET not set".into()))?;
+            .map_err(|_| Error::Config("SERVO_HMAC_SECRET not set".into()))?;
 
         let cfg = Self {
             project_id,
@@ -46,25 +46,25 @@ impl GcpConfig {
 
     pub fn validate(&self) -> Result<()> {
         if self.project_id.trim().is_empty() {
-            return Err(Error::Configuration("project_id cannot be empty".into()));
+            return Err(Error::Config("project_id cannot be empty".into()));
         }
         if self.location.trim().is_empty() {
-            return Err(Error::Configuration("location cannot be empty".into()));
+            return Err(Error::Config("location cannot be empty".into()));
         }
         if self.queue_name.trim().is_empty() {
-            return Err(Error::Configuration("queue_name cannot be empty".into()));
+            return Err(Error::Config("queue_name cannot be empty".into()));
         }
 
         // Validate worker URL format
         if !self.worker_url.starts_with("https://") && !self.worker_url.starts_with("http://") {
-            return Err(Error::Configuration(
+            return Err(Error::Config(
                 "worker_url must be a valid HTTP(S) URL".into(),
             ));
         }
 
         // Validate service account email format
         if !self.service_account_email.contains('@') {
-            return Err(Error::Configuration(
+            return Err(Error::Config(
                 "service_account_email must be a valid email".into(),
             ));
         }
@@ -72,11 +72,11 @@ impl GcpConfig {
         // Validate that service account key JSON can be parsed
         let _: serde_json::Value =
             serde_json::from_str(&self.service_account_key_json).map_err(|e| {
-                Error::Configuration(format!("service_account_key_json is not valid JSON: {}", e))
+                Error::Config(format!("service_account_key_json is not valid JSON: {}", e))
             })?;
 
         if self.hmac_secret.is_empty() {
-            return Err(Error::Configuration("hmac_secret cannot be empty".into()));
+            return Err(Error::Config("hmac_secret cannot be empty".into()));
         }
 
         Ok(())
