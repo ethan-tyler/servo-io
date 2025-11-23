@@ -3,7 +3,9 @@
 use crate::{Error, Result};
 use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
 use serde::{Deserialize, Serialize};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::Arc;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use tokio::sync::RwLock;
 
 /// Service account credentials from GCP
 #[derive(Debug, Clone, Deserialize)]
@@ -34,12 +36,46 @@ struct OidcClaims {
     exp: u64,
 }
 
-/// GCP authentication for generating OIDC tokens
+/// OAuth2 access token with expiration
+#[derive(Debug, Clone)]
+struct AccessToken {
+    token: String,
+    expires_at: Instant,
+}
+
+impl AccessToken {
+    fn is_expired(&self) -> bool {
+        Instant::now() >= self.expires_at
+    }
+}
+
+/// Response from OAuth2 token endpoint
+#[derive(Debug, Deserialize)]
+struct TokenResponse {
+    access_token: String,
+    expires_in: u64,
+    token_type: String,
+}
+
+/// JWT claims for OAuth2 service account assertion
+#[derive(Debug, Serialize)]
+struct OAuth2Claims {
+    iss: String,
+    scope: String,
+    aud: String,
+    exp: u64,
+    iat: u64,
+}
+
+/// GCP authentication for generating OIDC tokens and OAuth2 access tokens
 ///
-/// This generates self-signed JWT tokens using service account credentials
-/// for authenticating Cloud Tasks requests to Cloud Run services.
+/// This generates:
+/// - Self-signed OIDC JWTs for authenticating to Cloud Run services
+/// - OAuth2 access tokens for calling GCP APIs (Cloud Tasks, etc.)
 pub struct GcpAuth {
     credentials: ServiceAccountCredentials,
+    http_client: reqwest::Client,
+    access_token_cache: Arc<RwLock<Option<AccessToken>>>,
 }
 
 impl GcpAuth {
@@ -66,7 +102,16 @@ impl GcpAuth {
             )));
         }
 
-        Ok(Self { credentials })
+        let http_client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(30))
+            .build()
+            .map_err(|e| Error::Auth(format!("Failed to create HTTP client: {}", e)))?;
+
+        Ok(Self {
+            credentials,
+            http_client,
+            access_token_cache: Arc::new(RwLock::new(None)),
+        })
     }
 
     /// Generate an OIDC token for authenticating to a Cloud Run service
@@ -122,5 +167,115 @@ impl GcpAuth {
     /// Get the service account email
     pub fn service_account_email(&self) -> &str {
         &self.credentials.client_email
+    }
+
+    /// Get an OAuth2 access token for calling GCP APIs
+    ///
+    /// Uses cached token if available and not expired.
+    /// Otherwise, exchanges service account JWT for access token.
+    ///
+    /// # Arguments
+    ///
+    /// * `scope` - OAuth2 scope (e.g., "https://www.googleapis.com/auth/cloud-platform")
+    ///
+    /// # Returns
+    ///
+    /// An access token string valid for ~1 hour
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if token exchange fails
+    pub async fn get_access_token(&self, scope: &str) -> Result<String> {
+        // Check cache first
+        {
+            let cache = self.access_token_cache.read().await;
+            if let Some(token) = cache.as_ref() {
+                if !token.is_expired() {
+                    tracing::debug!("Using cached OAuth2 access token");
+                    return Ok(token.token.clone());
+                }
+            }
+        }
+
+        // Acquire new token
+        tracing::debug!(scope = %scope, "Fetching new OAuth2 access token");
+        let token = self.fetch_access_token(scope).await?;
+
+        // Cache it
+        {
+            let mut cache = self.access_token_cache.write().await;
+            *cache = Some(token.clone());
+        }
+
+        Ok(token.token)
+    }
+
+    /// Fetch a new OAuth2 access token from Google's token endpoint
+    async fn fetch_access_token(&self, scope: &str) -> Result<AccessToken> {
+        // Create JWT assertion
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|e| Error::Internal(format!("System time error: {}", e)))?
+            .as_secs();
+
+        let claims = OAuth2Claims {
+            iss: self.credentials.client_email.clone(),
+            scope: scope.to_string(),
+            aud: "https://oauth2.googleapis.com/token".to_string(),
+            iat: now,
+            exp: now + 3600,
+        };
+
+        let mut header = Header::new(Algorithm::RS256);
+        header.kid = Some(self.credentials.private_key_id.clone());
+
+        let encoding_key = EncodingKey::from_rsa_pem(self.credentials.private_key.as_bytes())
+            .map_err(|e| Error::Auth(format!("Failed to parse private key: {}", e)))?;
+
+        let assertion = encode(&header, &claims, &encoding_key)
+            .map_err(|e| Error::Auth(format!("Failed to encode JWT assertion: {}", e)))?;
+
+        // Exchange JWT for access token
+        let params = [
+            ("grant_type", "urn:ietf:params:oauth:grant-type:jwt-bearer"),
+            ("assertion", &assertion),
+        ];
+
+        let response = self
+            .http_client
+            .post("https://oauth2.googleapis.com/token")
+            .form(&params)
+            .send()
+            .await
+            .map_err(|e| Error::Auth(format!("Failed to request access token: {}", e)))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(Error::Auth(format!(
+                "Token endpoint returned {}: {}",
+                status, body
+            )));
+        }
+
+        let token_response: TokenResponse = response
+            .json()
+            .await
+            .map_err(|e| Error::Auth(format!("Failed to parse token response: {}", e)))?;
+
+        // Calculate expiration (subtract 5 minutes for safety margin)
+        let expires_in = token_response.expires_in.saturating_sub(300);
+        let expires_at = Instant::now() + Duration::from_secs(expires_in);
+
+        tracing::debug!(
+            token_type = %token_response.token_type,
+            expires_in_seconds = expires_in,
+            "OAuth2 access token acquired"
+        );
+
+        Ok(AccessToken {
+            token: token_response.access_token,
+            expires_at,
+        })
     }
 }

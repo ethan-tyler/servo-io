@@ -11,7 +11,7 @@ description = "GCP adapter for Servo (Cloud Tasks, Cloud Run)"
 
 [dependencies]
 # Async runtime
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["sync"] }
 async-trait = { workspace = true }
 
 # HTTP client
@@ -41,6 +41,9 @@ uuid = { workspace = true }
 
 # Date/time
 chrono = { workspace = true }
+
+# Random (for backoff jitter)
+rand = "0.8"
 
 # Internal dependencies
 servo-core = { path = "../servo-core" }
