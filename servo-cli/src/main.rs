@@ -70,6 +70,10 @@ enum Commands {
     Status {
         /// Execution ID to check
         execution_id: String,
+
+        /// Tenant ID
+        #[arg(long, env = "TENANT_ID")]
+        tenant_id: String,
     },
 
     /// Show workflow lineage
@@ -130,8 +134,15 @@ async fn main() -> anyhow::Result<()> {
             )
             .await?;
         }
-        Commands::Status { execution_id } => {
-            commands::status::execute(&execution_id).await?;
+        Commands::Status {
+            execution_id,
+            tenant_id,
+        } => {
+            let database_url = cli
+                .database_url
+                .ok_or_else(|| anyhow::anyhow!("DATABASE_URL not set"))?;
+
+            commands::status::execute(&execution_id, &tenant_id, &database_url).await?;
         }
         Commands::Lineage {
             name,

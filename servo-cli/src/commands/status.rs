@@ -1,16 +1,36 @@
 //! Status command
 
 use anyhow::Result;
+use servo_runtime::ExecutionState;
+use servo_storage::{PostgresStorage, TenantId};
+use std::sync::Arc;
 
-pub async fn execute(execution_id: &str) -> Result<()> {
-    tracing::info!("Checking status of execution: {}", execution_id);
+/// Check the status of an execution.
+///
+/// Looks up the execution by ID for the given tenant and prints basic details.
+/// In production, this would likely return structured JSON; here we log to stdout.
+pub async fn execute(execution_id: &str, tenant_id: &str, database_url: &str) -> Result<()> {
+    let storage = Arc::new(PostgresStorage::new(database_url).await?);
+    let tenant = TenantId::new(tenant_id);
+    let exec_id = uuid::Uuid::parse_str(execution_id)?;
 
-    // TODO: Implement status check
-    // 1. Look up execution by ID
-    // 2. Get current state
-    // 3. Display execution details
+    let execution = storage.get_execution(exec_id, &tenant).await?;
 
-    tracing::warn!("Status command not yet implemented");
+    let state: ExecutionState = execution.state.as_str().try_into()?;
+
+    println!("Execution: {}", execution.id);
+    println!("Workflow: {}", execution.workflow_id);
+    println!("Tenant: {}", tenant_id);
+    println!("State: {:?}", state);
+    if let Some(started) = execution.started_at {
+        println!("Started: {}", started);
+    }
+    if let Some(completed) = execution.completed_at {
+        println!("Completed: {}", completed);
+    }
+    if let Some(err) = execution.error_message {
+        println!("Error: {}", err);
+    }
 
     Ok(())
 }
