@@ -1,0 +1,35 @@
+# Rust build artifacts
+target/
+**/*.rs.bk
+*.pdb
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Documentation
+*.md
+docs/
+
+# CI/CD
+.github/
+
+# Local environment
+.env
+.env.local
+
+# Test artifacts
+coverage/
+
+# macOS
+.DS_Store
+
+# Windows
+Thumbs.db
