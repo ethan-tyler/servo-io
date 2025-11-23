@@ -31,9 +31,16 @@ anyhow = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 
+# UUID
+uuid = { workspace = true }
+
+# Date/Time
+chrono = { workspace = true }
+
 # Internal dependencies
 servo-core = { path = "../servo-core" }
 servo-runtime = { path = "../servo-runtime" }
 servo-storage = { path = "../servo-storage" }
+servo-cloud-gcp = { path = "../servo-cloud-gcp" }
 
 [dev-dependencies]
