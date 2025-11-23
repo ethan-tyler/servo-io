@@ -75,19 +75,20 @@ impl CloudTasksQueue {
     /// * `execution_id` - UUID of the execution record
     /// * `workflow_id` - UUID of the workflow to execute
     /// * `tenant_id` - Tenant identifier
-    /// * `idempotency_key` - Optional idempotency key
-    /// * `execution_plan` - Pre-compiled execution plan (asset IDs in topological order)
+    /// * `idempotency_key` - Optional idempotency key (not enforced by Cloud Tasks, passed through to worker)
+    /// * `execution_plan` - Pre-compiled execution plan (currently empty, worker compiles from workflow)
     ///
     /// # Returns
     ///
-    /// The Cloud Tasks task name/ID for tracking
+    /// The Cloud Tasks task name (e.g., "projects/.../locations/.../queues/.../tasks/...")
     ///
     /// # Errors
     ///
     /// Returns an error if:
-    /// - Token generation fails
+    /// - OAuth2 access token acquisition fails
+    /// - OIDC token generation fails
     /// - Payload signing fails
-    /// - Cloud Tasks API request fails
+    /// - Cloud Tasks API request fails (4xx/5xx)
     pub async fn enqueue(
         &self,
         execution_id: Uuid,
@@ -139,6 +140,8 @@ impl CloudTasksQueue {
     }
 
     /// Create a Cloud Tasks HTTP POST task
+    ///
+    /// Calls the Cloud Tasks API with retries and proper error handling.
     async fn create_cloud_task(
         &self,
         target_url: &str,
@@ -147,14 +150,14 @@ impl CloudTasksQueue {
         payload: &[u8],
     ) -> Result<String> {
         // Cloud Tasks API endpoint
-        let _api_url = format!(
+        let api_url = format!(
             "https://cloudtasks.googleapis.com/v2/{}/tasks",
             self.queue_path()
         );
 
         // Task definition
         use base64::Engine as _;
-        let _task = serde_json::json!({
+        let task = serde_json::json!({
             "task": {
                 "httpRequest": {
                     "url": target_url,
@@ -172,34 +175,113 @@ impl CloudTasksQueue {
             }
         });
 
-        // TODO: Get OAuth2 access token for Cloud Tasks API authentication
-        // For now, return a mock task ID to enable testing the flow
-        // In production, this would make the actual API call:
-        //
-        // let access_token = self.get_access_token().await?;
-        // let response = self.http_client
-        //     .post(&api_url)
-        //     .header("Authorization", format!("Bearer {}", access_token))
-        //     .json(&task)
-        //     .send()
-        //     .await?;
-        //
-        // let task_response: serde_json::Value = response.json().await?;
-        // let task_name = task_response["name"].as_str()
-        //     .ok_or_else(|| Error::Api("No task name in response".to_string()))?;
+        // Get OAuth2 access token for Cloud Tasks API authentication
+        let access_token = self
+            .auth
+            .get_access_token("https://www.googleapis.com/auth/cloud-platform")
+            .await?;
 
-        tracing::warn!(
-            "Cloud Tasks API integration not yet implemented - using mock task ID"
-        );
+        // Call Cloud Tasks API with retries
+        let task_name = self
+            .call_cloud_tasks_api(&api_url, &access_token, &task)
+            .await?;
 
-        // Mock task ID for development
-        let mock_task_id = format!(
-            "{}/tasks/mock-{}",
-            self.queue_path(),
-            Uuid::new_v4()
-        );
+        Ok(task_name)
+    }
 
-        Ok(mock_task_id)
+    /// Call Cloud Tasks API with exponential backoff retries
+    async fn call_cloud_tasks_api(
+        &self,
+        api_url: &str,
+        access_token: &str,
+        task: &serde_json::Value,
+    ) -> Result<String> {
+        const MAX_RETRIES: u32 = 3;
+        const INITIAL_BACKOFF_MS: u64 = 100;
+
+        let mut attempt = 0;
+        let mut backoff_ms = INITIAL_BACKOFF_MS;
+
+        loop {
+            attempt += 1;
+
+            let response = self
+                .http_client
+                .post(api_url)
+                .header("Authorization", format!("Bearer {}", access_token))
+                .header("Content-Type", "application/json")
+                .json(task)
+                .send()
+                .await
+                .map_err(|e| Error::Internal(format!("HTTP request failed: {}", e)))?;
+
+            let status = response.status();
+
+            // Success
+            if status.is_success() {
+                let task_response: serde_json::Value = response
+                    .json()
+                    .await
+                    .map_err(|e| Error::Api(format!("Failed to parse response: {}", e)))?;
+
+                let task_name = task_response["name"]
+                    .as_str()
+                    .ok_or_else(|| Error::Api("No task name in response".to_string()))?
+                    .to_string();
+
+                tracing::info!(
+                    task_name = %task_name,
+                    attempt = attempt,
+                    "Cloud Tasks API call succeeded"
+                );
+
+                return Ok(task_name);
+            }
+
+            // Client error (4xx) - don't retry
+            if status.is_client_error() {
+                let body = response.text().await.unwrap_or_default();
+                return Err(Error::Api(format!(
+                    "Cloud Tasks API returned {}: {}",
+                    status, body
+                )));
+            }
+
+            // Server error (5xx) - retry with backoff
+            if status.is_server_error() {
+                let body = response.text().await.unwrap_or_default();
+
+                if attempt >= MAX_RETRIES {
+                    return Err(Error::Api(format!(
+                        "Cloud Tasks API failed after {} attempts. Last response: {} - {}",
+                        MAX_RETRIES, status, body
+                    )));
+                }
+
+                tracing::warn!(
+                    status = %status,
+                    attempt = attempt,
+                    max_retries = MAX_RETRIES,
+                    backoff_ms = backoff_ms,
+                    "Cloud Tasks API returned server error, retrying"
+                );
+
+                // Exponential backoff with jitter
+                let jitter = rand::random::<u64>() % (backoff_ms / 2);
+                tokio::time::sleep(tokio::time::Duration::from_millis(backoff_ms + jitter))
+                    .await;
+                backoff_ms *= 2;
+
+                continue;
+            }
+
+            // Unexpected status code
+            let body = response.text().await.unwrap_or_default();
+            return Err(Error::Api(format!(
+                "Unexpected status from Cloud Tasks API: {} - {}",
+                status, body
+            )));
+        }
     }
 
     /// Get the full queue path

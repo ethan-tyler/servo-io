@@ -213,15 +213,19 @@ impl ExecutionOrchestrator {
             tracing::debug!("Enqueueing execution task");
 
             // TODO: Compile execution plan from workflow DAG
-            // For now, pass empty execution plan - worker will compile on execution
+            // Currently passes empty vec - worker must fetch workflow and compile plan
+            // Future: Pre-compile topological sort of workflow assets here
             let execution_plan = Vec::new();
 
+            // Note: idempotency_key is passed through but not yet enforced
+            // Task enqueuers may use it for deduplication, but orchestrator
+            // does not check executions.idempotency_key column yet
             enqueuer
                 .enqueue(
                     execution.id,
                     workflow_id,
                     tenant_id,
-                    idempotency_key,
+                    idempotency_key.clone(),
                     execution_plan,
                 )
                 .await
