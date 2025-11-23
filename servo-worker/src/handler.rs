@@ -23,6 +23,7 @@ use tracing::{error, info, warn};
 pub struct AppState {
     pub executor: Arc<WorkflowExecutor>,
     pub hmac_secret: String,
+    pub oidc_validator: Arc<crate::oidc::OidcValidator>,
 }
 
 /// Execute a workflow task
@@ -47,6 +48,32 @@ pub async fn execute_handler(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Json<ExecuteResponse>, ExecuteError> {
+    // OIDC validation (caller identity) - FIRST
+    // Verifies that the request is from Google Cloud Tasks
+    if state.oidc_validator.config().enabled {
+        let auth_header = headers
+            .get("authorization")
+            .and_then(|v| v.to_str().ok())
+            .ok_or(ExecuteError::MissingOidcToken)?;
+
+        let token = auth_header
+            .strip_prefix("Bearer ")
+            .ok_or(ExecuteError::InvalidOidcToken)?;
+
+        state
+            .oidc_validator
+            .validate_token(token)
+            .await
+            .map_err(|e| {
+                warn!(error = %e, "OIDC token validation failed");
+                ExecuteError::InvalidOidcToken
+            })?;
+
+        info!("OIDC token validated successfully");
+    }
+
+    // HMAC validation (payload integrity) - SECOND
+    // Verifies that the task body hasn't been tampered with
     // Extract signature from headers
     let signature_header = headers.get("x-servo-signature").and_then(|v| v.to_str().ok());
     let signature =
@@ -119,6 +146,8 @@ pub async fn health_handler() -> Json<HealthResponse> {
 /// Error types for execute handler
 #[derive(Debug)]
 pub enum ExecuteError {
+    MissingOidcToken,
+    InvalidOidcToken,
     MissingSignature,
     InvalidSignature,
     InvalidPayload(String),
@@ -127,6 +156,12 @@ pub enum ExecuteError {
 impl IntoResponse for ExecuteError {
     fn into_response(self) -> Response {
         let (status, message) = match self {
+            ExecuteError::MissingOidcToken => {
+                (StatusCode::UNAUTHORIZED, "Missing OIDC token")
+            }
+            ExecuteError::InvalidOidcToken => {
+                (StatusCode::UNAUTHORIZED, "Invalid OIDC token")
+            }
             ExecuteError::MissingSignature => {
                 (StatusCode::UNAUTHORIZED, "Missing signature header")
             }

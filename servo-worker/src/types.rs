@@ -60,6 +60,7 @@ impl ExecuteResponse {
     }
 
     /// Create an error response
+    #[allow(dead_code)]
     pub fn error(execution_id: Uuid, message: impl Into<String>) -> Self {
         Self {
             execution_id,

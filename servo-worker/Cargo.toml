@@ -44,11 +44,16 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 
-# Security (HMAC verification)
+# Security (HMAC verification + OIDC)
 hmac = "0.12"
 sha2 = "0.10"
 hex = "0.4"
 subtle = "2.5" # Constant-time comparison
+jsonwebtoken = "9.2" # JWT OIDC token validation
+parking_lot = "0.12" # High-performance RwLock for JWKS caching
+
+# HTTP client (for JWKS fetching)
+reqwest = { workspace = true }
 
 # Internal dependencies
 servo-core = { path = "../servo-core" }
@@ -59,4 +64,4 @@ servo-cloud-gcp = { path = "../servo-cloud-gcp" }
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util", "macros"] }
 mockall = { workspace = true }
-reqwest = "0.12"
+wiremock = "0.5" # Mock JWKS server for OIDC tests
