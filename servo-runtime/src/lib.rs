@@ -9,6 +9,7 @@ pub mod executor;
 pub mod orchestrator;
 pub mod retry;
 pub mod state_machine;
+pub mod task_enqueuer;
 
 // Re-export commonly used types
 pub use executor::{ExecutionResult, Executor};

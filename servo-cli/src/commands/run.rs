@@ -1,7 +1,6 @@
 //! Run command
 
 use anyhow::{Context, Result};
-use servo_cloud_gcp::{auth::GcpAuth, config::GcpConfig, queue::CloudTasksQueue};
 use servo_runtime::{orchestrator::ExecutionOrchestrator, retry::RetryPolicy};
 use servo_storage::{postgres::PostgresStorage, TenantId};
 use std::sync::Arc;
@@ -49,19 +48,9 @@ pub async fn execute(
         .context("Workflow not found")?;
     info!("Workflow found: {}", _workflow.name);
 
-    // Create orchestrator with optional task enqueuer
+    // Create orchestrator
     let retry_policy = RetryPolicy::default();
-    let orchestrator = match load_gcp_enqueuer().await {
-        Ok(enqueuer) => {
-            info!("GCP task enqueuer configured");
-            ExecutionOrchestrator::with_enqueuer(storage.clone(), retry_policy, enqueuer)
-        }
-        Err(e) => {
-            warn!("GCP task enqueuer not configured: {}", e);
-            warn!("Execution will be created but not enqueued to Cloud Tasks");
-            ExecutionOrchestrator::new(storage.clone(), retry_policy)
-        }
-    };
+    let orchestrator = ExecutionOrchestrator::new(storage.clone(), retry_policy);
 
     // Start execution
     info!("Starting execution...");
@@ -124,22 +113,4 @@ pub async fn execute(
         println!("{}", execution_id);
         Ok(())
     }
-}
-
-/// Load GCP configuration and create task enqueuer
-async fn load_gcp_enqueuer() -> Result<Arc<dyn servo_runtime::task_enqueuer::TaskEnqueuer>> {
-    // Load GCP configuration from environment
-    let gcp_config = GcpConfig::from_env()
-        .context("Failed to load GCP configuration from environment")?;
-
-    // Create GCP auth from service account JSON
-    let gcp_auth = Arc::new(
-        GcpAuth::from_service_account_json(&gcp_config.service_account_key_json)
-            .context("Failed to create GCP authentication")?,
-    );
-
-    // Create Cloud Tasks queue enqueuer
-    let enqueuer = Arc::new(CloudTasksQueue::from_config(gcp_config, gcp_auth)?);
-
-    Ok(enqueuer as Arc<dyn servo_runtime::task_enqueuer::TaskEnqueuer>)
 }
