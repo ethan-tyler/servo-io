@@ -124,7 +124,7 @@ async fn main() -> anyhow::Result<()> {
                 .database_url
                 .ok_or_else(|| anyhow::anyhow!("DATABASE_URL not set"))?;
 
-            commands::run::execute(
+            let status = commands::run::execute(
                 &workflow_name,
                 params.as_deref(),
                 wait,
@@ -133,6 +133,18 @@ async fn main() -> anyhow::Result<()> {
                 &database_url,
             )
             .await?;
+
+            // Convert execution status to exit code
+            use commands::run::ExecutionStatus;
+            match status {
+                ExecutionStatus::Succeeded(_) => std::process::exit(0),
+                ExecutionStatus::Failed(_) | ExecutionStatus::Timeout(_) | ExecutionStatus::Cancelled(_) => {
+                    std::process::exit(1)
+                }
+                ExecutionStatus::AsyncStarted(_) => {
+                    // No exit - execution started async
+                }
+            }
         }
         Commands::Status {
             execution_id,
