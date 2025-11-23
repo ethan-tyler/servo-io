@@ -20,8 +20,10 @@
 //! - PORT - HTTP port (default: 8080)
 //! - EXECUTION_TIMEOUT - Workflow execution timeout in seconds (default: 600)
 
+mod config;
 mod executor;
 mod handler;
+mod oidc;
 mod security;
 mod types;
 
@@ -78,6 +80,23 @@ async fn main() {
 
     info!("Storage initialized successfully");
 
+    // Initialize OIDC validator
+    let oidc_config = match config::OidcConfig::from_env() {
+        Ok(cfg) => cfg,
+        Err(e) => {
+            error!(error = %e, "Failed to load OIDC configuration");
+            std::process::exit(1);
+        }
+    };
+
+    let oidc_validator = match oidc::initialize_validator(oidc_config).await {
+        Ok(v) => Arc::new(v),
+        Err(e) => {
+            error!(error = %e, "Failed to initialize OIDC validator");
+            std::process::exit(1);
+        }
+    };
+
     // Create executor
     let executor = Arc::new(executor::WorkflowExecutor::new(
         storage,
@@ -88,6 +107,7 @@ async fn main() {
     let state = AppState {
         executor,
         hmac_secret: config.hmac_secret,
+        oidc_validator,
     };
 
     // Build router

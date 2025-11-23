@@ -16,6 +16,7 @@ use tracing::{error, info, instrument, warn};
 
 /// Errors that can occur during workflow execution
 #[derive(Debug, Error)]
+#[allow(dead_code)]
 pub enum ExecutionError {
     #[error("State transition failed: {0}")]
     StateTransition(String),
