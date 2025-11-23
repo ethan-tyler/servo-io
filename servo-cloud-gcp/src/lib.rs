@@ -8,6 +8,7 @@ pub mod config;
 pub mod executor;
 pub mod monitoring;
 pub mod queue;
+pub mod signing;
 
 // Re-export commonly used types
 pub use config::GcpConfig;
