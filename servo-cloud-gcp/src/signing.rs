@@ -9,7 +9,7 @@ type HmacSha256 = Hmac<Sha256>;
 /// Sign a payload with HMAC-SHA256, returning a hex-encoded signature.
 pub fn sign_payload(payload: &[u8], secret: &str) -> Result<String> {
     let mut mac = HmacSha256::new_from_slice(secret.as_bytes())
-        .map_err(|_| Error::Configuration("Invalid HMAC secret".into()))?;
+        .map_err(|_| Error::Config("Invalid HMAC secret".into()))?;
     mac.update(payload);
     let signature = mac.finalize().into_bytes();
     Ok(hex::encode(signature))

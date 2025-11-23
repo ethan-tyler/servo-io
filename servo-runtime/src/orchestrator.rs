@@ -39,6 +39,7 @@
 
 use crate::retry::RetryPolicy;
 use crate::state_machine::ExecutionState;
+use crate::task_enqueuer::TaskEnqueuer;
 use crate::Result;
 use chrono::Utc;
 use servo_storage::{ExecutionModel, PostgresStorage, TenantId};
@@ -56,6 +57,7 @@ use uuid::Uuid;
 pub struct ExecutionOrchestrator {
     storage: Arc<PostgresStorage>,
     retry_policy: RetryPolicy,
+    task_enqueuer: Option<Arc<dyn TaskEnqueuer>>,
 }
 
 impl ExecutionOrchestrator {
@@ -69,6 +71,26 @@ impl ExecutionOrchestrator {
         Self {
             storage,
             retry_policy,
+            task_enqueuer: None,
+        }
+    }
+
+    /// Create a new execution orchestrator with a task enqueuer
+    ///
+    /// # Arguments
+    ///
+    /// * `storage` - PostgreSQL storage instance (must be configured with servo_app role)
+    /// * `retry_policy` - Retry policy for handling transient failures
+    /// * `task_enqueuer` - Task enqueuer for triggering workflow execution (e.g., Cloud Tasks)
+    pub fn with_task_enqueuer(
+        storage: Arc<PostgresStorage>,
+        retry_policy: RetryPolicy,
+        task_enqueuer: Arc<dyn TaskEnqueuer>,
+    ) -> Self {
+        Self {
+            storage,
+            retry_policy,
+            task_enqueuer: Some(task_enqueuer),
         }
     }
 
@@ -185,6 +207,39 @@ impl ExecutionOrchestrator {
             );
         }
         tracing::debug!(execution_id = %execution.id, "Execution created");
+
+        // Enqueue task for execution if task enqueuer is configured
+        if let Some(enqueuer) = &self.task_enqueuer {
+            tracing::debug!("Enqueueing execution task");
+
+            // TODO: Compile execution plan from workflow DAG
+            // For now, pass empty execution plan - worker will compile on execution
+            let execution_plan = Vec::new();
+
+            enqueuer
+                .enqueue(
+                    execution.id,
+                    workflow_id,
+                    tenant_id,
+                    idempotency_key,
+                    execution_plan,
+                )
+                .await
+                .map_err(|e| {
+                    error!(
+                        execution_id = %execution.id,
+                        error = %e,
+                        "Failed to enqueue execution task"
+                    );
+                    crate::Error::Internal(format!("Failed to enqueue task: {}", e))
+                })?;
+
+            tracing::debug!(
+                execution_id = %execution.id,
+                "Execution task enqueued successfully"
+            );
+        }
+
         Ok(execution.id)
     }
 
