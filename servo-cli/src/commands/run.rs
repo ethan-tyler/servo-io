@@ -1,7 +1,7 @@
 //! Run command
 
 use anyhow::{Context, Result};
-use servo_runtime::{orchestrator::ExecutionOrchestrator, retry::RetryPolicy};
+use servo_runtime::{orchestrator::ExecutionOrchestrator, retry::RetryPolicy, ExecutionState};
 use servo_storage::{postgres::PostgresStorage, TenantId};
 use std::sync::Arc;
 use std::time::Duration;
@@ -10,6 +10,21 @@ use uuid::Uuid;
 
 use crate::polling;
 
+/// Execution status returned by the run command
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExecutionStatus {
+    /// Execution completed successfully
+    Succeeded(Uuid),
+    /// Execution failed
+    Failed(Uuid),
+    /// Execution timed out
+    Timeout(Uuid),
+    /// Execution was cancelled
+    Cancelled(Uuid),
+    /// Execution started asynchronously (--wait not used)
+    AsyncStarted(Uuid),
+}
+
 pub async fn execute(
     workflow_name: &str,
     params: Option<&str>,
@@ -17,7 +32,7 @@ pub async fn execute(
     timeout_secs: u64,
     poll_interval_secs: u64,
     database_url: &str,
-) -> Result<()> {
+) -> Result<ExecutionStatus> {
     info!("Running workflow: {}", workflow_name);
 
     if let Some(params) = params {
@@ -77,27 +92,26 @@ pub async fn execute(
         .await
         {
             Ok(final_state) => {
-                use servo_runtime::ExecutionState;
                 match final_state {
                     ExecutionState::Succeeded => {
                         info!("✅ Execution completed successfully");
-                        std::process::exit(0);
+                        Ok(ExecutionStatus::Succeeded(execution_id))
                     }
                     ExecutionState::Failed => {
                         warn!("❌ Execution failed");
-                        std::process::exit(1);
+                        Ok(ExecutionStatus::Failed(execution_id))
                     }
                     ExecutionState::Timeout => {
                         warn!("⏱️  Execution timed out");
-                        std::process::exit(1);
+                        Ok(ExecutionStatus::Timeout(execution_id))
                     }
                     ExecutionState::Cancelled => {
                         warn!("🚫 Execution was cancelled");
-                        std::process::exit(1);
+                        Ok(ExecutionStatus::Cancelled(execution_id))
                     }
                     _ => {
                         warn!("⚠️  Execution ended in unexpected state: {:?}", final_state);
-                        std::process::exit(1);
+                        Ok(ExecutionStatus::Failed(execution_id))
                     }
                 }
             }
@@ -105,12 +119,12 @@ pub async fn execute(
                 warn!("Failed to wait for execution: {}", e);
                 info!("Execution ID: {}", execution_id);
                 info!("Use 'servo status {}' to check execution status", execution_id);
-                std::process::exit(1);
+                Err(e)
             }
         }
     } else {
         // Return execution ID for user to track
         println!("{}", execution_id);
-        Ok(())
+        Ok(ExecutionStatus::AsyncStarted(execution_id))
     }
 }
