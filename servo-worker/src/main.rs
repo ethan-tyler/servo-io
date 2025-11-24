@@ -20,18 +20,17 @@
 //! - PORT - HTTP port (default: 8080)
 //! - EXECUTION_TIMEOUT - Workflow execution timeout in seconds (default: 600)
 
-mod config;
-mod executor;
-mod handler;
-mod oidc;
-mod security;
-mod types;
-
+// Import from the library instead of declaring as modules
 use axum::{
     routing::{get, post},
     Router,
 };
-use handler::{execute_handler, health_handler, metrics_handler, ready_handler, AppState};
+use servo_worker::{
+    config,
+    executor,
+    handler::{execute_handler, health_handler, metrics_handler, ready_handler, AppState},
+    oidc,
+};
 use servo_storage::PostgresStorage;
 use std::sync::Arc;
 use std::time::Duration;
@@ -103,11 +102,24 @@ async fn main() {
         config.execution_timeout,
     ));
 
+    // Initialize rate limiters
+    let tenant_rate_limiter_config = servo_worker::rate_limiter::TenantRateLimiterConfig::from_env();
+    let tenant_rate_limiter = Arc::new(servo_worker::rate_limiter::TenantRateLimiter::new(
+        tenant_rate_limiter_config,
+    ));
+
+    let ip_rate_limiter_config = servo_worker::rate_limiter::IpRateLimiterConfig::from_env();
+    let ip_rate_limiter = Arc::new(servo_worker::rate_limiter::IpRateLimiter::new(
+        ip_rate_limiter_config,
+    ));
+
     // Create application state
     let state = AppState {
         executor,
         hmac_secret: config.hmac_secret,
         oidc_validator,
+        tenant_rate_limiter,
+        ip_rate_limiter,
     };
 
     // Build router with security hardening
@@ -119,7 +131,8 @@ async fn main() {
         .layer(TraceLayer::new_for_http())
         .layer(TimeoutLayer::new(Duration::from_secs(610))) // Slightly longer than execution timeout
         .layer(RequestBodyLimitLayer::new(10 * 1024 * 1024)) // 10MB max request body
-        .with_state(state);
+        .with_state(state)
+        .into_make_service_with_connect_info::<std::net::SocketAddr>(); // Enable ConnectInfo for IP extraction
 
     // Start server
     let addr = format!("0.0.0.0:{}", config.port);
@@ -134,6 +147,7 @@ async fn main() {
     info!(address = %addr, "Server listening");
 
     // Run server with graceful shutdown
+    // Note: app is already a MakeService with ConnectInfo
     if let Err(e) = axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
         .await

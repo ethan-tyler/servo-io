@@ -18,6 +18,9 @@ path = "src/main.rs"
 axum = { version = "0.7", features = ["macros"] }
 tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.5", features = ["trace", "timeout", "limit"] }
+tower_governor = "0.4"
+governor = "0.6"
+dashmap = "5.5"
 hyper = "1.0"
 
 # Async runtime

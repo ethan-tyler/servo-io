@@ -197,10 +197,22 @@ async fn setup_test_env() -> (MockServer, AppState, String) {
 
     let hmac_secret = "test-hmac-secret".to_string();
 
+    // Initialize rate limiters for tests
+    let tenant_rate_limiter_config = servo_worker::rate_limiter::TenantRateLimiterConfig::default();
+    let tenant_rate_limiter = Arc::new(servo_worker::rate_limiter::TenantRateLimiter::new(
+        tenant_rate_limiter_config,
+    ));
+    let ip_rate_limiter_config = servo_worker::rate_limiter::IpRateLimiterConfig::default();
+    let ip_rate_limiter = Arc::new(servo_worker::rate_limiter::IpRateLimiter::new(
+        ip_rate_limiter_config,
+    ));
+
     let state = AppState {
         executor,
         hmac_secret: hmac_secret.clone(),
         oidc_validator,
+        tenant_rate_limiter,
+        ip_rate_limiter,
     };
 
     (mock_server, state, audience.to_string())
@@ -372,10 +384,22 @@ async fn test_oidc_validation_can_be_disabled() {
 
     let hmac_secret = "test-hmac-secret".to_string();
 
+    // Initialize rate limiters for tests
+    let tenant_rate_limiter_config = servo_worker::rate_limiter::TenantRateLimiterConfig::default();
+    let tenant_rate_limiter = Arc::new(servo_worker::rate_limiter::TenantRateLimiter::new(
+        tenant_rate_limiter_config,
+    ));
+    let ip_rate_limiter_config = servo_worker::rate_limiter::IpRateLimiterConfig::default();
+    let ip_rate_limiter = Arc::new(servo_worker::rate_limiter::IpRateLimiter::new(
+        ip_rate_limiter_config,
+    ));
+
     let state = AppState {
         executor,
         hmac_secret: hmac_secret.clone(),
         oidc_validator,
+        tenant_rate_limiter,
+        ip_rate_limiter,
     };
 
     let (body, signature) = create_signed_payload(&state.hmac_secret);
