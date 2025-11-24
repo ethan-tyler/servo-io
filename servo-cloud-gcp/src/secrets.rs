@@ -237,7 +237,10 @@ impl SecretManager {
                     "Secret Manager API HTTP request failed"
                 );
 
-                return Err(Error::Internal(format!("Secret Manager API call failed: {}", e)));
+                return Err(Error::Internal(format!(
+                    "Secret Manager API call failed: {}",
+                    e
+                )));
             }
         };
 

@@ -281,12 +281,26 @@ pub enum ExecuteError {
 impl IntoResponse for ExecuteError {
     fn into_response(self) -> Response {
         let (status, message, retry_after) = match self {
-            ExecuteError::MissingOidcToken => (StatusCode::UNAUTHORIZED, "Missing OIDC token".to_string(), None),
-            ExecuteError::InvalidOidcToken => (StatusCode::UNAUTHORIZED, "Invalid OIDC token".to_string(), None),
-            ExecuteError::MissingSignature => {
-                (StatusCode::UNAUTHORIZED, "Missing signature header".to_string(), None)
-            }
-            ExecuteError::InvalidSignature => (StatusCode::UNAUTHORIZED, "Invalid signature".to_string(), None),
+            ExecuteError::MissingOidcToken => (
+                StatusCode::UNAUTHORIZED,
+                "Missing OIDC token".to_string(),
+                None,
+            ),
+            ExecuteError::InvalidOidcToken => (
+                StatusCode::UNAUTHORIZED,
+                "Invalid OIDC token".to_string(),
+                None,
+            ),
+            ExecuteError::MissingSignature => (
+                StatusCode::UNAUTHORIZED,
+                "Missing signature header".to_string(),
+                None,
+            ),
+            ExecuteError::InvalidSignature => (
+                StatusCode::UNAUTHORIZED,
+                "Invalid signature".to_string(),
+                None,
+            ),
             ExecuteError::InvalidPayload(ref msg) => {
                 warn!(error = %msg, "Invalid payload received");
                 (StatusCode::BAD_REQUEST, "Invalid payload".to_string(), None)

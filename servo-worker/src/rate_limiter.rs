@@ -17,7 +17,7 @@
 use dashmap::DashMap;
 use governor::{
     clock::DefaultClock,
-    state::{InMemoryState, direct::NotKeyed},
+    state::{direct::NotKeyed, InMemoryState},
     Quota, RateLimiter as GovernorRateLimiter,
 };
 use std::net::IpAddr;
@@ -137,13 +137,16 @@ impl TenantRateLimiter {
     /// Returns `Ok(())` if the request is allowed, `Err(())` if rate limited.
     pub fn check_tenant(&self, tenant_id: &str) -> Result<(), RateLimitError> {
         // Get or create rate limiter for this tenant
-        let limiter = self.limiters.entry(tenant_id.to_string()).or_insert_with(|| {
-            let quota = Quota::per_second(
-                NonZeroU32::new(self.config.requests_per_second)
-                    .expect("requests_per_second must be non-zero"),
-            );
-            GovernorRateLimiter::direct(quota)
-        });
+        let limiter = self
+            .limiters
+            .entry(tenant_id.to_string())
+            .or_insert_with(|| {
+                let quota = Quota::per_second(
+                    NonZeroU32::new(self.config.requests_per_second)
+                        .expect("requests_per_second must be non-zero"),
+                );
+                GovernorRateLimiter::direct(quota)
+            });
 
         // Check rate limit
         match limiter.check() {
@@ -238,10 +241,7 @@ pub enum RateLimitError {
     },
 
     #[error("IP rate limit exceeded: {ip} ({limit_per_minute} req/min)")]
-    IpLimitExceeded {
-        ip: IpAddr,
-        limit_per_minute: u32,
-    },
+    IpLimitExceeded { ip: IpAddr, limit_per_minute: u32 },
 }
 
 #[cfg(test)]
@@ -332,7 +332,10 @@ mod tests {
             }
         }
 
-        assert!(hit_rate_limit, "Should eventually hit rate limit after many requests");
+        assert!(
+            hit_rate_limit,
+            "Should eventually hit rate limit after many requests"
+        );
     }
 
     #[test]

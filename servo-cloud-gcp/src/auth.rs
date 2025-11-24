@@ -300,7 +300,10 @@ impl GcpAuth {
                     "OAuth2 token endpoint HTTP request failed"
                 );
 
-                return Err(Error::Auth(format!("Failed to request access token: {}", e)));
+                return Err(Error::Auth(format!(
+                    "Failed to request access token: {}",
+                    e
+                )));
             }
         };
 

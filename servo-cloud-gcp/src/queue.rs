@@ -307,7 +307,8 @@ impl CloudTasksQueue {
                     // Classify error to determine if we should retry
                     let status = crate::circuit_breaker::extract_status(&e);
                     let is_network = crate::circuit_breaker::is_network_error(&e);
-                    let should_trip = crate::circuit_breaker::should_trip_breaker(status, is_network);
+                    let should_trip =
+                        crate::circuit_breaker::should_trip_breaker(status, is_network);
 
                     tracing::warn!(
                         status = ?status,

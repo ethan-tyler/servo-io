@@ -25,13 +25,12 @@ use axum::{
     routing::{get, post},
     Router,
 };
+use servo_storage::PostgresStorage;
 use servo_worker::{
-    config,
-    executor,
+    config, executor,
     handler::{execute_handler, health_handler, metrics_handler, ready_handler, AppState},
     oidc,
 };
-use servo_storage::PostgresStorage;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::signal;
@@ -103,7 +102,8 @@ async fn main() {
     ));
 
     // Initialize rate limiters
-    let tenant_rate_limiter_config = servo_worker::rate_limiter::TenantRateLimiterConfig::from_env();
+    let tenant_rate_limiter_config =
+        servo_worker::rate_limiter::TenantRateLimiterConfig::from_env();
     let tenant_rate_limiter = Arc::new(servo_worker::rate_limiter::TenantRateLimiter::new(
         tenant_rate_limiter_config,
     ));
