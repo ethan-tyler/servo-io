@@ -64,7 +64,7 @@ async-trait = "0.1"
 futures = "0.3"
 
 # HTTP client
-reqwest = { version = "0.11", features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
 
 # Testing
 mockall = "0.12"
