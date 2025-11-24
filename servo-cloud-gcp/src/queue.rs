@@ -303,15 +303,16 @@ impl CloudTasksQueue {
             if status.as_u16() == 429 {
                 ENQUEUE_RETRIES.with_label_values(&["429"]).inc();
                 // Read Retry-After header before consuming response body
-                let retry_after_ms = if let Some(retry_after) = response.headers().get("retry-after") {
-                    retry_after
-                        .to_str()
-                        .ok()
-                        .and_then(|s| s.parse::<u64>().ok())
-                        .map(|secs| secs * 1000) // Convert seconds to milliseconds
-                } else {
-                    None
-                };
+                let retry_after_ms =
+                    if let Some(retry_after) = response.headers().get("retry-after") {
+                        retry_after
+                            .to_str()
+                            .ok()
+                            .and_then(|s| s.parse::<u64>().ok())
+                            .map(|secs| secs * 1000) // Convert seconds to milliseconds
+                    } else {
+                        None
+                    };
 
                 let body = response.text().await.unwrap_or_default();
 
@@ -334,8 +335,7 @@ impl CloudTasksQueue {
                 );
 
                 // Respect Retry-After header or use exponential backoff
-                tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms))
-                    .await;
+                tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
 
                 // Continue exponential backoff for next attempt if no Retry-After header
                 if retry_after_ms.is_none() {
@@ -376,8 +376,7 @@ impl CloudTasksQueue {
 
                 // Exponential backoff with jitter
                 let jitter = rand::random::<u64>() % (backoff_ms / 2);
-                tokio::time::sleep(tokio::time::Duration::from_millis(backoff_ms + jitter))
-                    .await;
+                tokio::time::sleep(tokio::time::Duration::from_millis(backoff_ms + jitter)).await;
                 backoff_ms *= 2;
 
                 continue;
@@ -410,10 +409,7 @@ impl CloudTasksQueue {
     /// `Ok(())` if Cloud Tasks API is reachable, `Err(String)` with error message otherwise.
     pub async fn health_check(&self) -> Result<()> {
         // GET the queue details as a lightweight health check
-        let api_url = format!(
-            "https://cloudtasks.googleapis.com/v2/{}",
-            self.queue_path()
-        );
+        let api_url = format!("https://cloudtasks.googleapis.com/v2/{}", self.queue_path());
 
         // Get access token
         let access_token = self

@@ -81,10 +81,8 @@ impl WorkflowExecutor {
     )]
     pub async fn execute(&self, payload: TaskPayload) -> Result<(), ExecutionError> {
         let tenant_id = TenantId::new(&payload.tenant_id);
-        let orchestrator = ExecutionOrchestrator::new(
-            self.storage.clone(),
-            servo_runtime::RetryPolicy::default(),
-        );
+        let orchestrator =
+            ExecutionOrchestrator::new(self.storage.clone(), servo_runtime::RetryPolicy::default());
 
         info!(
             asset_count = payload.execution_plan.len(),
@@ -155,10 +153,7 @@ impl WorkflowExecutor {
                     )
                     .await
                     .map_err(|e| {
-                        ExecutionError::StateTransition(format!(
-                            "Failed to record timeout: {}",
-                            e
-                        ))
+                        ExecutionError::StateTransition(format!("Failed to record timeout: {}", e))
                     })?;
             }
             Err(e) => {

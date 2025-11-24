@@ -177,10 +177,8 @@ async fn setup_test_env() -> (MockServer, AppState, String) {
     };
 
     // Initialize OIDC validator
-    let oidc_validator = Arc::new(
-        OidcValidator::new(oidc_config)
-            .expect("Failed to create OIDC validator")
-    );
+    let oidc_validator =
+        Arc::new(OidcValidator::new(oidc_config).expect("Failed to create OIDC validator"));
 
     // Fetch JWKS to populate cache
     oidc_validator
@@ -193,7 +191,7 @@ async fn setup_test_env() -> (MockServer, AppState, String) {
     let storage = Arc::new(
         PostgresStorage::new(database_url)
             .await
-            .expect("Failed to create storage - tests require database")
+            .expect("Failed to create storage - tests require database"),
     );
     let executor = Arc::new(WorkflowExecutor::new(storage, Duration::from_secs(60)));
 
@@ -361,14 +359,14 @@ async fn test_oidc_validation_can_be_disabled() {
     };
 
     let oidc_validator = Arc::new(
-        OidcValidator::new(oidc_config).expect("Failed to create disabled OIDC validator")
+        OidcValidator::new(oidc_config).expect("Failed to create disabled OIDC validator"),
     );
 
     let database_url = "postgresql://test:test@localhost:5432/test";
     let storage = Arc::new(
         PostgresStorage::new(database_url)
             .await
-            .expect("Failed to create storage")
+            .expect("Failed to create storage"),
     );
     let executor = Arc::new(WorkflowExecutor::new(storage, Duration::from_secs(60)));
 

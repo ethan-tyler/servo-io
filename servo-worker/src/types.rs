@@ -111,7 +111,10 @@ mod tests {
         assert_eq!(payload.execution_id, deserialized.execution_id);
         assert_eq!(payload.workflow_id, deserialized.workflow_id);
         assert_eq!(payload.tenant_id, deserialized.tenant_id);
-        assert_eq!(payload.execution_plan.len(), deserialized.execution_plan.len());
+        assert_eq!(
+            payload.execution_plan.len(),
+            deserialized.execution_plan.len()
+        );
     }
 
     #[test]

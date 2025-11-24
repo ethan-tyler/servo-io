@@ -147,7 +147,10 @@ mod tests {
             .await;
 
         assert!(!result.healthy);
-        assert_eq!(result.error_message, Some("Service unavailable".to_string()));
+        assert_eq!(
+            result.error_message,
+            Some("Service unavailable".to_string())
+        );
 
         // Cache should still be valid even for failures
         assert!(health_check.is_cache_valid().await);

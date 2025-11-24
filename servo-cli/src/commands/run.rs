@@ -47,8 +47,7 @@ pub async fn execute(
         .context("workflow_name must be a valid UUID. Name lookup not yet implemented.")?;
 
     // Get tenant ID from environment
-    let tenant_id = std::env::var("TENANT_ID")
-        .context("TENANT_ID environment variable not set")?;
+    let tenant_id = std::env::var("TENANT_ID").context("TENANT_ID environment variable not set")?;
     let tenant_id = TenantId::new(tenant_id);
 
     // Create storage
@@ -91,34 +90,35 @@ pub async fn execute(
         )
         .await
         {
-            Ok(final_state) => {
-                match final_state {
-                    ExecutionState::Succeeded => {
-                        info!("✅ Execution completed successfully");
-                        Ok(ExecutionStatus::Succeeded(execution_id))
-                    }
-                    ExecutionState::Failed => {
-                        warn!("❌ Execution failed");
-                        Ok(ExecutionStatus::Failed(execution_id))
-                    }
-                    ExecutionState::Timeout => {
-                        warn!("⏱️  Execution timed out");
-                        Ok(ExecutionStatus::Timeout(execution_id))
-                    }
-                    ExecutionState::Cancelled => {
-                        warn!("🚫 Execution was cancelled");
-                        Ok(ExecutionStatus::Cancelled(execution_id))
-                    }
-                    _ => {
-                        warn!("⚠️  Execution ended in unexpected state: {:?}", final_state);
-                        Ok(ExecutionStatus::Failed(execution_id))
-                    }
+            Ok(final_state) => match final_state {
+                ExecutionState::Succeeded => {
+                    info!("✅ Execution completed successfully");
+                    Ok(ExecutionStatus::Succeeded(execution_id))
                 }
-            }
+                ExecutionState::Failed => {
+                    warn!("❌ Execution failed");
+                    Ok(ExecutionStatus::Failed(execution_id))
+                }
+                ExecutionState::Timeout => {
+                    warn!("⏱️  Execution timed out");
+                    Ok(ExecutionStatus::Timeout(execution_id))
+                }
+                ExecutionState::Cancelled => {
+                    warn!("🚫 Execution was cancelled");
+                    Ok(ExecutionStatus::Cancelled(execution_id))
+                }
+                _ => {
+                    warn!("⚠️  Execution ended in unexpected state: {:?}", final_state);
+                    Ok(ExecutionStatus::Failed(execution_id))
+                }
+            },
             Err(e) => {
                 warn!("Failed to wait for execution: {}", e);
                 info!("Execution ID: {}", execution_id);
-                info!("Use 'servo status {}' to check execution status", execution_id);
+                info!(
+                    "Use 'servo status {}' to check execution status",
+                    execution_id
+                );
                 Err(e)
             }
         }

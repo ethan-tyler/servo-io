@@ -76,18 +76,17 @@ use uuid::Uuid;
 
 /// Helper to load required environment variables
 fn load_test_config() -> anyhow::Result<(String, String, String, String, String, String)> {
-    let project_id = env::var("GCP_PROJECT_ID")
-        .map_err(|_| anyhow::anyhow!("GCP_PROJECT_ID not set"))?;
-    let location = env::var("GCP_LOCATION")
-        .map_err(|_| anyhow::anyhow!("GCP_LOCATION not set"))?;
-    let queue_name = env::var("GCP_QUEUE_NAME")
-        .map_err(|_| anyhow::anyhow!("GCP_QUEUE_NAME not set"))?;
-    let worker_url = env::var("GCP_WORKER_URL")
-        .map_err(|_| anyhow::anyhow!("GCP_WORKER_URL not set"))?;
+    let project_id =
+        env::var("GCP_PROJECT_ID").map_err(|_| anyhow::anyhow!("GCP_PROJECT_ID not set"))?;
+    let location = env::var("GCP_LOCATION").map_err(|_| anyhow::anyhow!("GCP_LOCATION not set"))?;
+    let queue_name =
+        env::var("GCP_QUEUE_NAME").map_err(|_| anyhow::anyhow!("GCP_QUEUE_NAME not set"))?;
+    let worker_url =
+        env::var("GCP_WORKER_URL").map_err(|_| anyhow::anyhow!("GCP_WORKER_URL not set"))?;
     let service_account_json = env::var("GCP_SERVICE_ACCOUNT_KEY_JSON")
         .map_err(|_| anyhow::anyhow!("GCP_SERVICE_ACCOUNT_KEY_JSON not set"))?;
-    let hmac_secret = env::var("SERVO_HMAC_SECRET")
-        .map_err(|_| anyhow::anyhow!("SERVO_HMAC_SECRET not set"))?;
+    let hmac_secret =
+        env::var("SERVO_HMAC_SECRET").map_err(|_| anyhow::anyhow!("SERVO_HMAC_SECRET not set"))?;
 
     Ok((
         project_id,
@@ -190,13 +189,7 @@ async fn test_real_cloud_tasks_error_handling() {
 
     // Attempt to enqueue should fail with 404 or 403
     let result = queue
-        .enqueue(
-            execution_id,
-            workflow_id,
-            "test-tenant",
-            None,
-            Vec::new(),
-        )
+        .enqueue(execution_id, workflow_id, "test-tenant", None, Vec::new())
         .await;
 
     assert!(

@@ -155,8 +155,8 @@ struct Config {
 
 /// Load configuration from environment variables
 fn load_config() -> Result<Config, String> {
-    let database_url = std::env::var("DATABASE_URL")
-        .map_err(|_| "DATABASE_URL environment variable not set")?;
+    let database_url =
+        std::env::var("DATABASE_URL").map_err(|_| "DATABASE_URL environment variable not set")?;
 
     let hmac_secret = std::env::var("SERVO_HMAC_SECRET")
         .map_err(|_| "SERVO_HMAC_SECRET environment variable not set")?;
