@@ -122,10 +122,7 @@ impl SecretManager {
             ));
         }
 
-        info!(
-            count = secrets.len(),
-            "Secrets initialized successfully"
-        );
+        info!(count = secrets.len(), "Secrets initialized successfully");
 
         Ok(())
     }
@@ -167,10 +164,7 @@ impl SecretManager {
         let mut last_refresh = self.last_refresh.write().await;
         *last_refresh = Instant::now();
 
-        info!(
-            count = secrets.len(),
-            "Secrets refreshed successfully"
-        );
+        info!(count = secrets.len(), "Secrets refreshed successfully");
 
         Ok(())
     }

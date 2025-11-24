@@ -58,8 +58,8 @@ pub fn verify_signature(
     })?;
 
     // Compute expected signature
-    let mut mac = HmacSha256::new_from_slice(secret.as_bytes())
-        .expect("HMAC can accept keys of any size");
+    let mut mac =
+        HmacSha256::new_from_slice(secret.as_bytes()).expect("HMAC can accept keys of any size");
     mac.update(payload);
     let expected = mac.finalize().into_bytes();
 
@@ -115,7 +115,10 @@ mod tests {
         // Verify should fail
         let result = verify_signature(payload, wrong_signature, secret);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), SecurityError::VerificationFailed));
+        assert!(matches!(
+            result.unwrap_err(),
+            SecurityError::VerificationFailed
+        ));
     }
 
     #[test]
@@ -132,7 +135,10 @@ mod tests {
         // Verify with wrong secret should fail
         let result = verify_signature(payload, &signature, wrong_secret);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), SecurityError::VerificationFailed));
+        assert!(matches!(
+            result.unwrap_err(),
+            SecurityError::VerificationFailed
+        ));
     }
 
     #[test]
@@ -144,7 +150,10 @@ mod tests {
         // Verify should fail with format error
         let result = verify_signature(payload, invalid_hex, secret);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), SecurityError::InvalidFormat(_)));
+        assert!(matches!(
+            result.unwrap_err(),
+            SecurityError::InvalidFormat(_)
+        ));
     }
 
     #[test]
@@ -159,7 +168,10 @@ mod tests {
     fn test_extract_signature_missing() {
         let result = extract_signature(None);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), SecurityError::MissingSignature));
+        assert!(matches!(
+            result.unwrap_err(),
+            SecurityError::MissingSignature
+        ));
     }
 
     #[test]

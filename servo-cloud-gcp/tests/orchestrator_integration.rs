@@ -67,7 +67,10 @@ fn test_cloud_tasks_queue_rejects_invalid_service_account() {
         "test-secret".to_string(),
     );
 
-    assert!(result.is_err(), "Should reject invalid service account JSON");
+    assert!(
+        result.is_err(),
+        "Should reject invalid service account JSON"
+    );
 }
 
 #[tokio::test]
@@ -101,13 +104,7 @@ async fn test_task_enqueuer_implementation() {
 
     // This will fail with mock credentials
     let result = queue
-        .enqueue(
-            execution_id,
-            workflow_id,
-            tenant_id,
-            None,
-            execution_plan,
-        )
+        .enqueue(execution_id, workflow_id, tenant_id, None, execution_plan)
         .await;
 
     // With mock credentials, we expect authentication failure

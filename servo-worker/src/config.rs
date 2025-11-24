@@ -40,8 +40,8 @@ impl OidcConfig {
             return Ok(Self::disabled());
         }
 
-        let issuer = env::var("OIDC_ISSUER")
-            .unwrap_or_else(|_| "https://accounts.google.com".to_string());
+        let issuer =
+            env::var("OIDC_ISSUER").unwrap_or_else(|_| "https://accounts.google.com".to_string());
 
         let jwks_url = Self::derive_jwks_url(&issuer)?;
 

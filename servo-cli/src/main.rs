@@ -138,9 +138,9 @@ async fn main() -> anyhow::Result<()> {
             use commands::run::ExecutionStatus;
             match status {
                 ExecutionStatus::Succeeded(_) => std::process::exit(0),
-                ExecutionStatus::Failed(_) | ExecutionStatus::Timeout(_) | ExecutionStatus::Cancelled(_) => {
-                    std::process::exit(1)
-                }
+                ExecutionStatus::Failed(_)
+                | ExecutionStatus::Timeout(_)
+                | ExecutionStatus::Cancelled(_) => std::process::exit(1),
                 ExecutionStatus::AsyncStarted(_) => {
                     // No exit - execution started async
                 }

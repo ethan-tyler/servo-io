@@ -5,9 +5,7 @@
 //! - Counters for success/failure/rate-limit tracking
 
 use lazy_static::lazy_static;
-use prometheus::{
-    register_histogram_vec, register_int_counter_vec, HistogramVec, IntCounterVec,
-};
+use prometheus::{register_histogram_vec, register_int_counter_vec, HistogramVec, IntCounterVec};
 
 lazy_static! {
     /// Duration of task enqueue operations in seconds

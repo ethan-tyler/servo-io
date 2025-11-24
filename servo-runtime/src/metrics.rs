@@ -55,6 +55,7 @@ mod tests {
         // This will panic if they're not registered
         let _ = DB_OPERATION_DURATION.with_label_values(&["test"]);
         let _ = EXECUTION_CREATE_TOTAL.with_label_values(&["success"]);
-        let _ = EXECUTION_STATE_TRANSITION_TOTAL.with_label_values(&["pending", "running", "success"]);
+        let _ =
+            EXECUTION_STATE_TRANSITION_TOTAL.with_label_values(&["pending", "running", "success"]);
     }
 }

@@ -10,10 +10,7 @@ use uuid::Uuid;
 
 /// Check if an execution state is terminal
 pub fn is_terminal_state(state: &str) -> bool {
-    matches!(
-        state,
-        "succeeded" | "failed" | "cancelled" | "timeout"
-    )
+    matches!(state, "succeeded" | "failed" | "cancelled" | "timeout")
 }
 
 /// Parse state string into ExecutionState enum
@@ -100,9 +97,12 @@ pub async fn poll_execution_status(
 
             // Check if terminal state reached
             if is_terminal_state(&execution.state) {
-                let final_state = parse_execution_state(&execution.state)
-                    .context("Invalid execution state")?;
-                info!("Execution {} completed with state: {:?}", execution_id, final_state);
+                let final_state =
+                    parse_execution_state(&execution.state).context("Invalid execution state")?;
+                info!(
+                    "Execution {} completed with state: {:?}",
+                    execution_id, final_state
+                );
                 return Ok(final_state);
             }
         }

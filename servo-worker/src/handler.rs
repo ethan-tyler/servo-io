@@ -75,16 +75,17 @@ pub async fn execute_handler(
     // HMAC validation (payload integrity) - SECOND
     // Verifies that the task body hasn't been tampered with
     // Extract signature from headers
-    let signature_header = headers.get("x-servo-signature").and_then(|v| v.to_str().ok());
+    let signature_header = headers
+        .get("x-servo-signature")
+        .and_then(|v| v.to_str().ok());
     let signature =
         extract_signature(signature_header).map_err(|_| ExecuteError::MissingSignature)?;
 
     // Verify signature
-    verify_signature(&body, signature, &state.hmac_secret)
-        .map_err(|e| {
-            error!(error = %e, "Signature verification failed");
-            ExecuteError::InvalidSignature
-        })?;
+    verify_signature(&body, signature, &state.hmac_secret).map_err(|e| {
+        error!(error = %e, "Signature verification failed");
+        ExecuteError::InvalidSignature
+    })?;
 
     info!("Signature verified successfully");
 
@@ -161,8 +162,9 @@ pub async fn ready_handler(State(state): State<AppState>) -> impl IntoResponse {
             Json(serde_json::json!({
                 "status": "not_ready",
                 "reason": "database_unreachable"
-            }))
-        ).into_response();
+            })),
+        )
+            .into_response();
     }
 
     (
@@ -172,8 +174,9 @@ pub async fn ready_handler(State(state): State<AppState>) -> impl IntoResponse {
             "checks": {
                 "database": "ok"
             }
-        }))
-    ).into_response()
+        })),
+    )
+        .into_response()
 }
 
 /// Metrics endpoint
@@ -187,29 +190,18 @@ pub async fn metrics_handler(headers: HeaderMap) -> impl IntoResponse {
 
     // Optional authentication check
     if let Ok(expected_token) = std::env::var("SERVO_METRICS_TOKEN") {
-        let auth_header = headers
-            .get("authorization")
-            .and_then(|v| v.to_str().ok());
+        let auth_header = headers.get("authorization").and_then(|v| v.to_str().ok());
 
         if let Some(auth) = auth_header {
             if let Some(token) = auth.strip_prefix("Bearer ") {
                 if token != expected_token {
-                    return (
-                        StatusCode::UNAUTHORIZED,
-                        "Invalid metrics token"
-                    ).into_response();
+                    return (StatusCode::UNAUTHORIZED, "Invalid metrics token").into_response();
                 }
             } else {
-                return (
-                    StatusCode::UNAUTHORIZED,
-                    "Invalid authorization format"
-                ).into_response();
+                return (StatusCode::UNAUTHORIZED, "Invalid authorization format").into_response();
             }
         } else {
-            return (
-                StatusCode::UNAUTHORIZED,
-                "Missing authorization header"
-            ).into_response();
+            return (StatusCode::UNAUTHORIZED, "Missing authorization header").into_response();
         }
     }
 
@@ -219,19 +211,22 @@ pub async fn metrics_handler(headers: HeaderMap) -> impl IntoResponse {
 
     let mut buffer = vec![];
     match encoder.encode(&metric_families, &mut buffer) {
-        Ok(()) => {
-            (
-                StatusCode::OK,
-                [(axum::http::header::CONTENT_TYPE, "text/plain; version=0.0.4")],
-                buffer
-            ).into_response()
-        }
+        Ok(()) => (
+            StatusCode::OK,
+            [(
+                axum::http::header::CONTENT_TYPE,
+                "text/plain; version=0.0.4",
+            )],
+            buffer,
+        )
+            .into_response(),
         Err(e) => {
             error!(error = %e, "Failed to encode metrics");
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                "Failed to encode metrics"
-            ).into_response()
+                "Failed to encode metrics",
+            )
+                .into_response()
         }
     }
 }
@@ -249,18 +244,12 @@ pub enum ExecuteError {
 impl IntoResponse for ExecuteError {
     fn into_response(self) -> Response {
         let (status, message) = match self {
-            ExecuteError::MissingOidcToken => {
-                (StatusCode::UNAUTHORIZED, "Missing OIDC token")
-            }
-            ExecuteError::InvalidOidcToken => {
-                (StatusCode::UNAUTHORIZED, "Invalid OIDC token")
-            }
+            ExecuteError::MissingOidcToken => (StatusCode::UNAUTHORIZED, "Missing OIDC token"),
+            ExecuteError::InvalidOidcToken => (StatusCode::UNAUTHORIZED, "Invalid OIDC token"),
             ExecuteError::MissingSignature => {
                 (StatusCode::UNAUTHORIZED, "Missing signature header")
             }
-            ExecuteError::InvalidSignature => {
-                (StatusCode::UNAUTHORIZED, "Invalid signature")
-            }
+            ExecuteError::InvalidSignature => (StatusCode::UNAUTHORIZED, "Invalid signature"),
             ExecuteError::InvalidPayload(ref msg) => {
                 warn!(error = %msg, "Invalid payload received");
                 (StatusCode::BAD_REQUEST, "Invalid payload")

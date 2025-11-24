@@ -90,10 +90,8 @@ impl GcpAuth {
     ///
     /// Returns an error if the JSON cannot be parsed or is invalid
     pub fn from_service_account_json(service_account_json: &str) -> Result<Self> {
-        let credentials: ServiceAccountCredentials =
-            serde_json::from_str(service_account_json).map_err(|e| {
-                Error::Auth(format!("Failed to parse service account JSON: {}", e))
-            })?;
+        let credentials: ServiceAccountCredentials = serde_json::from_str(service_account_json)
+            .map_err(|e| Error::Auth(format!("Failed to parse service account JSON: {}", e)))?;
 
         // Validate it's a service account
         if credentials.account_type != "service_account" {

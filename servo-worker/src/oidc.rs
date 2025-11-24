@@ -8,9 +8,7 @@
 //! - Fail-closed security model
 
 use anyhow::{anyhow, Context, Result};
-use jsonwebtoken::{
-    decode, decode_header, jwk::JwkSet, Algorithm, DecodingKey, Validation,
-};
+use jsonwebtoken::{decode, decode_header, jwk::JwkSet, Algorithm, DecodingKey, Validation};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -87,8 +85,7 @@ impl OidcValidator {
         }
 
         // 1. Decode header to get Key ID (kid)
-        let header = decode_header(token)
-            .map_err(|e| anyhow!("Invalid token header: {}", e))?;
+        let header = decode_header(token).map_err(|e| anyhow!("Invalid token header: {}", e))?;
 
         let kid = header
             .kid
@@ -112,11 +109,10 @@ impl OidcValidator {
         validation.set_audience(&[&self.config.expected_audience]);
         validation.set_issuer(&[&self.config.issuer]);
 
-        let token_data = decode::<Claims>(token, &decoding_key, &validation)
-            .map_err(|e| {
-                warn!("Token validation failed: {}", e);
-                anyhow!("Token validation failed: {}", e)
-            })?;
+        let token_data = decode::<Claims>(token, &decoding_key, &validation).map_err(|e| {
+            warn!("Token validation failed: {}", e);
+            anyhow!("Token validation failed: {}", e)
+        })?;
 
         // 5. Additional claims validation
         self.verify_claims(&token_data.claims)?;
@@ -202,18 +198,17 @@ impl OidcValidator {
         // Check not-before (if present)
         if let Some(nbf) = claims.nbf {
             if nbf > now {
-                return Err(anyhow!(
-                    "Token not yet valid (nbf: {}, now: {})",
-                    nbf,
-                    now
-                ));
+                return Err(anyhow!("Token not yet valid (nbf: {}, now: {})", nbf, now));
             }
         }
 
         // Check issued-at is reasonable (not too far in past/future)
         let iat_diff = (now - claims.iat).abs();
         if iat_diff > 3600 {
-            warn!("Token iat is {} seconds from now (possible clock skew)", iat_diff);
+            warn!(
+                "Token iat is {} seconds from now (possible clock skew)",
+                iat_diff
+            );
         }
 
         // Email must be present (service account identity)
@@ -244,7 +239,14 @@ pub async fn initialize_validator(config: OidcConfig) -> Result<OidcValidator> {
             .await
             .context("Failed to fetch JWKS on startup - cannot start with OIDC enabled")?;
 
-        let key_count = validator.jwks_cache.read().as_ref().unwrap().keys.keys.len();
+        let key_count = validator
+            .jwks_cache
+            .read()
+            .as_ref()
+            .unwrap()
+            .keys
+            .keys
+            .len();
         info!("✅ OIDC validator initialized ({} keys)", key_count);
     } else {
         warn!("⚠️  OIDC validation DISABLED - do not use in production!");
