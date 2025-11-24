@@ -40,6 +40,7 @@ pub struct ExecutionModel {
     pub workflow_id: Uuid,
     pub state: String,
     pub tenant_id: Option<String>,
+    pub idempotency_key: Option<String>,
     pub started_at: Option<DateTime<Utc>>,
     pub completed_at: Option<DateTime<Utc>>,
     pub error_message: Option<String>,

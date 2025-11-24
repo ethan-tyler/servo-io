@@ -4,11 +4,17 @@
 //! Cloud Tasks, Cloud Run, and Cloud Logging.
 
 pub mod auth;
+pub mod config;
 pub mod executor;
+pub mod health;
+pub mod metrics;
 pub mod monitoring;
 pub mod queue;
+pub mod secrets;
+pub mod signing;
 
 // Re-export commonly used types
+pub use config::GcpConfig;
 pub use executor::CloudRunExecutor;
 pub use queue::CloudTasksQueue;
 

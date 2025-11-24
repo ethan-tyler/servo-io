@@ -1,0 +1,70 @@
+[package]
+name = "servo-worker"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+description = "Cloud Run worker for Servo workflow execution"
+
+[[bin]]
+name = "servo-worker"
+path = "src/main.rs"
+
+[dependencies]
+# HTTP server
+axum = { version = "0.7", features = ["macros"] }
+tower = { version = "0.5", features = ["util"] }
+tower-http = { version = "0.5", features = ["trace", "timeout", "limit"] }
+hyper = "1.0"
+
+# Async runtime
+tokio = { workspace = true, features = ["macros", "signal"] }
+async-trait = { workspace = true }
+futures = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+base64 = "0.22"
+
+# Date/time
+chrono = { workspace = true }
+
+# UUID
+uuid = { workspace = true }
+
+# Error handling
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+
+# Logging/tracing
+tracing = { workspace = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# Security (HMAC verification + OIDC)
+hmac = "0.12"
+sha2 = "0.10"
+hex = "0.4"
+subtle = "2.5" # Constant-time comparison
+jsonwebtoken = "9.2" # JWT OIDC token validation
+parking_lot = "0.12" # High-performance RwLock for JWKS caching
+
+# HTTP client (for JWKS fetching)
+reqwest = { workspace = true }
+
+# Metrics
+prometheus = { version = "0.13", features = ["process"] }
+
+# Internal dependencies
+servo-core = { path = "../servo-core" }
+servo-runtime = { path = "../servo-runtime" }
+servo-storage = { path = "../servo-storage" }
+servo-cloud-gcp = { path = "../servo-cloud-gcp" }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util", "macros"] }
+mockall = { workspace = true }
+wiremock = "0.5" # Mock JWKS server for OIDC tests
