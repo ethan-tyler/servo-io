@@ -28,13 +28,29 @@ lazy_static! {
     ///
     /// Labels:
     /// - status: "success", "failure", "rate_limit"
-    /// - tenant_id: UUID of the tenant (for debugging, can be disabled in production if cardinality is an issue)
+    ///
+    /// Note: tenant_id label is controlled by SERVO_METRICS_INCLUDE_TENANT_ID env var.
+    /// Set to "false" in production to avoid high cardinality.
     pub static ref ENQUEUE_TOTAL: IntCounterVec = register_int_counter_vec!(
         "servo_enqueue_total",
         "Total number of task enqueue attempts",
-        &["status", "tenant_id"]
+        &["status"]
     )
     .expect("servo_enqueue_total metric registration");
+
+    /// Total number of task enqueue attempts by tenant (optional, high cardinality)
+    ///
+    /// Only populated if SERVO_METRICS_INCLUDE_TENANT_ID=true
+    ///
+    /// Labels:
+    /// - status: "success", "failure", "rate_limit"
+    /// - tenant_id: UUID of the tenant
+    pub static ref ENQUEUE_TOTAL_BY_TENANT: IntCounterVec = register_int_counter_vec!(
+        "servo_enqueue_total_by_tenant",
+        "Total number of task enqueue attempts by tenant (high cardinality)",
+        &["status", "tenant_id"]
+    )
+    .expect("servo_enqueue_total_by_tenant metric registration");
 
     /// Number of retry attempts for Cloud Tasks API calls
     ///
@@ -68,7 +84,8 @@ mod tests {
         // Ensure all metrics are registered correctly by accessing them
         // This will panic if they're not registered
         let _ = ENQUEUE_DURATION.with_label_values(&["api"]);
-        let _ = ENQUEUE_TOTAL.with_label_values(&["success", "tenant1"]);
+        let _ = ENQUEUE_TOTAL.with_label_values(&["success"]);
+        let _ = ENQUEUE_TOTAL_BY_TENANT.with_label_values(&["success", "tenant1"]);
         let _ = ENQUEUE_RETRIES.with_label_values(&["5xx"]);
         let _ = TOKEN_ACQUISITION_DURATION.with_label_values(&["true"]);
     }

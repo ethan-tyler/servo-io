@@ -6,6 +6,7 @@
 pub mod auth;
 pub mod config;
 pub mod executor;
+pub mod health;
 pub mod metrics;
 pub mod monitoring;
 pub mod queue;
