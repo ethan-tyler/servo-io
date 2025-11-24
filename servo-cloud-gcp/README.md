@@ -130,6 +130,72 @@ gcloud secrets versions destroy 1 --secret=servo-hmac-secret
 Enable these APIs in your project:
 
 - Cloud Tasks API
+- Secret Manager API (if using Secret Manager for HMAC secrets)
+
+## Security Considerations
+
+### Metrics Endpoint Protection
+
+**CRITICAL**: The `/metrics` endpoint exposes operational metrics and should be protected in production:
+
+#### Option 1: Bearer Token Authentication (Recommended for internet-facing services)
+
+```bash
+# Set metrics token environment variable
+export SERVO_METRICS_TOKEN="$(openssl rand -base64 32)"
+
+# Configure your monitoring system (Prometheus, Datadog, etc.) to include the token
+# Example Prometheus scrape config:
+scrape_configs:
+  - job_name: 'servo-worker'
+    bearer_token: 'your-metrics-token-here'
+    static_configs:
+      - targets: ['servo-worker.run.app:443']
+```
+
+#### Option 2: Internal-Only Access (Recommended for VPC deployments)
+
+Restrict `/metrics` to internal traffic only:
+
+```bash
+# Cloud Run: Use ingress settings
+gcloud run services update servo-worker \
+  --ingress=internal  # Only accessible within VPC
+
+# GKE: Use NetworkPolicy
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-metrics-from-prometheus
+spec:
+  podSelector:
+    matchLabels:
+      app: servo-worker
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app: prometheus
+    ports:
+    - port: 8080
+      protocol: TCP
+```
+
+#### Option 3: Separate Metrics Port (Advanced)
+
+Run metrics on a separate internal-only port (requires code changes).
+
+### Metrics Cardinality Control
+
+To prevent high-cardinality metrics in multi-tenant environments:
+
+```bash
+# Disable per-tenant metrics (recommended for >100 tenants)
+export SERVO_METRICS_INCLUDE_TENANT_ID=false
+```
+
+This disables `servo_enqueue_total_by_tenant` and keeps only aggregate `servo_enqueue_total`
+metrics. Use structured logs with tenant_id for per-tenant debugging instead.
 
 ## Features
 

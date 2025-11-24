@@ -1,7 +1,7 @@
 //! Cloud Tasks queue implementation
 
 use crate::auth::GcpAuth;
-use crate::metrics::{ENQUEUE_DURATION, ENQUEUE_RETRIES, ENQUEUE_TOTAL};
+use crate::metrics::{ENQUEUE_DURATION, ENQUEUE_RETRIES, ENQUEUE_TOTAL, ENQUEUE_TOTAL_BY_TENANT};
 use crate::signing::sign_payload;
 use crate::{Error, Result};
 use async_trait::async_trait;
@@ -9,6 +9,17 @@ use serde::Serialize;
 use servo_runtime::task_enqueuer::{EnqueueError, EnqueueResult, TaskEnqueuer};
 use servo_storage::TenantId;
 use uuid::Uuid;
+
+/// Check if tenant-level metrics should be included
+///
+/// Controlled by SERVO_METRICS_INCLUDE_TENANT_ID environment variable.
+/// Defaults to false to avoid high cardinality in production.
+fn should_include_tenant_metrics() -> bool {
+    std::env::var("SERVO_METRICS_INCLUDE_TENANT_ID")
+        .unwrap_or_else(|_| "false".to_string())
+        .parse::<bool>()
+        .unwrap_or(false)
+}
 
 /// Task payload sent to the worker
 #[derive(Debug, Serialize)]
@@ -141,9 +152,16 @@ impl CloudTasksQueue {
         // Record success or failure metrics
         match &result {
             Ok(task_id) => {
-                ENQUEUE_TOTAL
-                    .with_label_values(&["success", tenant_id])
-                    .inc();
+                // Always record aggregate metrics
+                ENQUEUE_TOTAL.with_label_values(&["success"]).inc();
+
+                // Optionally record per-tenant metrics (high cardinality)
+                if should_include_tenant_metrics() {
+                    ENQUEUE_TOTAL_BY_TENANT
+                        .with_label_values(&["success", tenant_id])
+                        .inc();
+                }
+
                 tracing::info!(
                     execution_id = %execution_id,
                     task_id = %task_id,
@@ -157,9 +175,17 @@ impl CloudTasksQueue {
                 } else {
                     "failure"
                 };
-                ENQUEUE_TOTAL
-                    .with_label_values(&[status, tenant_id])
-                    .inc();
+
+                // Always record aggregate metrics
+                ENQUEUE_TOTAL.with_label_values(&[status]).inc();
+
+                // Optionally record per-tenant metrics (high cardinality)
+                if should_include_tenant_metrics() {
+                    ENQUEUE_TOTAL_BY_TENANT
+                        .with_label_values(&[status, tenant_id])
+                        .inc();
+                }
+
                 tracing::error!(
                     execution_id = %execution_id,
                     error = %e,
@@ -372,6 +398,48 @@ impl CloudTasksQueue {
             "projects/{}/locations/{}/queues/{}",
             self.project_id, self.location, self.queue_name
         )
+    }
+
+    /// Health check for Cloud Tasks API reachability
+    ///
+    /// Performs a lightweight GET request to the Cloud Tasks queue to verify
+    /// API accessibility. This is used by readiness probes.
+    ///
+    /// # Returns
+    ///
+    /// `Ok(())` if Cloud Tasks API is reachable, `Err(String)` with error message otherwise.
+    pub async fn health_check(&self) -> Result<()> {
+        // GET the queue details as a lightweight health check
+        let api_url = format!(
+            "https://cloudtasks.googleapis.com/v2/{}",
+            self.queue_path()
+        );
+
+        // Get access token
+        let access_token = self
+            .auth
+            .get_access_token("https://www.googleapis.com/auth/cloud-platform")
+            .await
+            .map_err(|e| Error::Internal(format!("Failed to get access token: {}", e)))?;
+
+        // Call Cloud Tasks API (GET is lightweight, no side effects)
+        let response = self
+            .http_client
+            .get(&api_url)
+            .header("Authorization", format!("Bearer {}", access_token))
+            .timeout(std::time::Duration::from_secs(5)) // Short timeout for health checks
+            .send()
+            .await
+            .map_err(|e| Error::Internal(format!("Cloud Tasks API unreachable: {}", e)))?;
+
+        if response.status().is_success() {
+            Ok(())
+        } else {
+            Err(Error::Internal(format!(
+                "Cloud Tasks API returned non-success: {}",
+                response.status()
+            )))
+        }
     }
 }
 
