@@ -1,5 +1,6 @@
 //! GCP authentication and OIDC token generation
 
+use crate::metrics::TOKEN_ACQUISITION_DURATION;
 use crate::{Error, Result};
 use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
 use serde::{Deserialize, Serialize};
@@ -191,13 +192,21 @@ impl GcpAuth {
             let cache = self.access_token_cache.read().await;
             if let Some(token) = cache.as_ref() {
                 if !token.is_expired() {
+                    // Record cache hit
+                    let _timer = TOKEN_ACQUISITION_DURATION
+                        .with_label_values(&["true"])
+                        .start_timer();
                     tracing::debug!("Using cached OAuth2 access token");
                     return Ok(token.token.clone());
                 }
             }
         }
 
-        // Acquire new token
+        // Acquire new token (cache miss)
+        let _timer = TOKEN_ACQUISITION_DURATION
+            .with_label_values(&["false"])
+            .start_timer();
+
         tracing::debug!(scope = %scope, "Fetching new OAuth2 access token");
         let token = self.fetch_access_token(scope).await?;
 
