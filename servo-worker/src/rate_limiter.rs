@@ -48,6 +48,14 @@ impl TenantRateLimiterConfig {
             .and_then(|v| v.parse::<u32>().ok())
             .unwrap_or(10);
 
+        // Validate: reject zero/negative (u32 prevents negative, but check zero)
+        if requests_per_second == 0 {
+            panic!(
+                "Invalid SERVO_RATE_LIMIT_TENANT_RPS: must be positive (got 0). \
+                 Use a positive value or unset to use default (10)."
+            );
+        }
+
         info!(
             requests_per_second = requests_per_second,
             "Tenant rate limiter configuration loaded"
@@ -81,6 +89,14 @@ impl IpRateLimiterConfig {
             .ok()
             .and_then(|v| v.parse::<u32>().ok())
             .unwrap_or(60);
+
+        // Validate: reject zero/negative (u32 prevents negative, but check zero)
+        if requests_per_minute == 0 {
+            panic!(
+                "Invalid SERVO_RATE_LIMIT_METRICS_RPM: must be positive (got 0). \
+                 Use a positive value or unset to use default (60)."
+            );
+        }
 
         info!(
             requests_per_minute = requests_per_minute,
@@ -337,5 +353,30 @@ mod tests {
         // Same tenant doesn't increase count
         limiter.check_tenant("tenant-1").ok();
         assert_eq!(limiter.active_limiters_count(), 2);
+    }
+
+    #[test]
+    #[should_panic(expected = "Invalid SERVO_RATE_LIMIT_TENANT_RPS: must be positive")]
+    fn test_tenant_config_rejects_zero() {
+        std::env::set_var("SERVO_RATE_LIMIT_TENANT_RPS", "0");
+        let _config = TenantRateLimiterConfig::from_env();
+    }
+
+    #[test]
+    #[should_panic(expected = "Invalid SERVO_RATE_LIMIT_METRICS_RPM: must be positive")]
+    fn test_ip_config_rejects_zero() {
+        std::env::set_var("SERVO_RATE_LIMIT_METRICS_RPM", "0");
+        let _config = IpRateLimiterConfig::from_env();
+    }
+
+    #[test]
+    fn test_config_accepts_positive_values() {
+        std::env::set_var("SERVO_RATE_LIMIT_TENANT_RPS", "100");
+        let tenant_config = TenantRateLimiterConfig::from_env();
+        assert_eq!(tenant_config.requests_per_second, 100);
+
+        std::env::set_var("SERVO_RATE_LIMIT_METRICS_RPM", "200");
+        let ip_config = IpRateLimiterConfig::from_env();
+        assert_eq!(ip_config.requests_per_minute, 200);
     }
 }
