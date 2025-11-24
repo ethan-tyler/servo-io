@@ -4,6 +4,7 @@
 //! Cloud Tasks, Cloud Run, and Cloud Logging.
 
 pub mod auth;
+pub mod circuit_breaker;
 pub mod config;
 pub mod executor;
 pub mod health;

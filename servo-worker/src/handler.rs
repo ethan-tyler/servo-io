@@ -5,6 +5,7 @@
 //! - GET /health - Health check endpoint
 
 use crate::executor::WorkflowExecutor;
+use crate::rate_limiter::{self, RateLimitError};
 use crate::security::{extract_signature, verify_signature};
 use crate::types::{ExecuteResponse, HealthResponse, TaskPayload};
 use axum::{
@@ -24,6 +25,8 @@ pub struct AppState {
     pub executor: Arc<WorkflowExecutor>,
     pub hmac_secret: String,
     pub oidc_validator: Arc<crate::oidc::OidcValidator>,
+    pub tenant_rate_limiter: Arc<rate_limiter::TenantRateLimiter>,
+    pub ip_rate_limiter: Arc<rate_limiter::IpRateLimiter>,
 }
 
 /// Execute a workflow task
@@ -102,14 +105,26 @@ pub async fn execute_handler(
     })?;
 
     let execution_id = payload.execution_id;
+    let tenant_id = &payload.tenant_id;
 
     info!(
         execution_id = %execution_id,
         workflow_id = %payload.workflow_id,
-        tenant_id = %payload.tenant_id,
+        tenant_id = %tenant_id,
         asset_count = payload.execution_plan.len(),
         "Received execution request"
     );
+
+    // Per-tenant rate limiting (after auth, before expensive work)
+    if let Err(rate_limit_error) = state.tenant_rate_limiter.check_tenant(tenant_id) {
+        warn!(
+            tenant_id = %tenant_id,
+            execution_id = %execution_id,
+            error = %rate_limit_error,
+            "Tenant rate limit exceeded"
+        );
+        return Err(ExecuteError::RateLimitExceeded(rate_limit_error));
+    }
 
     // Spawn background task for execution
     // This allows us to return 200 OK immediately (Cloud Tasks requirement)
@@ -183,10 +198,31 @@ pub async fn ready_handler(State(state): State<AppState>) -> impl IntoResponse {
 ///
 /// Exposes Prometheus-format metrics.
 /// Optionally authenticated with Bearer token (if SERVO_METRICS_TOKEN is set).
+/// Rate limited per IP address to prevent abuse.
 ///
 /// Returns all registered Prometheus metrics in text format.
-pub async fn metrics_handler(headers: HeaderMap) -> impl IntoResponse {
+pub async fn metrics_handler(
+    State(state): State<AppState>,
+    axum::extract::ConnectInfo(addr): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
     use prometheus::{Encoder, TextEncoder};
+
+    // IP-based rate limiting (early check to prevent abuse)
+    let client_ip = addr.ip();
+    if let Err(rate_limit_error) = state.ip_rate_limiter.check_ip(client_ip) {
+        warn!(
+            ip = %client_ip,
+            error = %rate_limit_error,
+            "Metrics endpoint rate limit exceeded"
+        );
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            [(axum::http::header::RETRY_AFTER, "60")],
+            "Rate limit exceeded for metrics endpoint",
+        )
+            .into_response();
+    }
 
     // Optional authentication check
     if let Ok(expected_token) = std::env::var("SERVO_METRICS_TOKEN") {
@@ -239,24 +275,65 @@ pub enum ExecuteError {
     MissingSignature,
     InvalidSignature,
     InvalidPayload(String),
+    RateLimitExceeded(RateLimitError),
 }
 
 impl IntoResponse for ExecuteError {
     fn into_response(self) -> Response {
-        let (status, message) = match self {
-            ExecuteError::MissingOidcToken => (StatusCode::UNAUTHORIZED, "Missing OIDC token"),
-            ExecuteError::InvalidOidcToken => (StatusCode::UNAUTHORIZED, "Invalid OIDC token"),
-            ExecuteError::MissingSignature => {
-                (StatusCode::UNAUTHORIZED, "Missing signature header")
-            }
-            ExecuteError::InvalidSignature => (StatusCode::UNAUTHORIZED, "Invalid signature"),
+        let (status, message, retry_after) = match self {
+            ExecuteError::MissingOidcToken => (
+                StatusCode::UNAUTHORIZED,
+                "Missing OIDC token".to_string(),
+                None,
+            ),
+            ExecuteError::InvalidOidcToken => (
+                StatusCode::UNAUTHORIZED,
+                "Invalid OIDC token".to_string(),
+                None,
+            ),
+            ExecuteError::MissingSignature => (
+                StatusCode::UNAUTHORIZED,
+                "Missing signature header".to_string(),
+                None,
+            ),
+            ExecuteError::InvalidSignature => (
+                StatusCode::UNAUTHORIZED,
+                "Invalid signature".to_string(),
+                None,
+            ),
             ExecuteError::InvalidPayload(ref msg) => {
                 warn!(error = %msg, "Invalid payload received");
-                (StatusCode::BAD_REQUEST, "Invalid payload")
+                (StatusCode::BAD_REQUEST, "Invalid payload".to_string(), None)
+            }
+            ExecuteError::RateLimitExceeded(ref err) => {
+                // Return 429 with Retry-After header
+                let retry_after_secs = match err {
+                    RateLimitError::TenantLimitExceeded { .. } => {
+                        // For per-second limits, suggest retrying after 1 second
+                        1
+                    }
+                    RateLimitError::IpLimitExceeded { .. } => {
+                        // For per-minute limits, suggest retrying after 60 seconds
+                        60
+                    }
+                };
+                (
+                    StatusCode::TOO_MANY_REQUESTS,
+                    format!("Rate limit exceeded: {}", err),
+                    Some(retry_after_secs),
+                )
             }
         };
 
-        (status, message).into_response()
+        // Build response with optional Retry-After header
+        let mut response = (status, message).into_response();
+        if let Some(retry_secs) = retry_after {
+            response.headers_mut().insert(
+                axum::http::header::RETRY_AFTER,
+                axum::http::HeaderValue::from_str(&retry_secs.to_string()).unwrap(),
+            );
+        }
+        response
     }
 }
 
