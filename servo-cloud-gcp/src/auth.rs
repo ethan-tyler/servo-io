@@ -264,14 +264,14 @@ impl GcpAuth {
 
         // Wrap HTTP call with circuit breaker
         let http_client = &self.http_client;
-        let params_clone = params.clone();
+        let params_copy = params;
 
         let response_result = self
             .circuit_breaker
             .call(|| async move {
                 http_client
                     .post("https://oauth2.googleapis.com/token")
-                    .form(&params_clone)
+                    .form(&params_copy)
                     .send()
                     .await
             })
