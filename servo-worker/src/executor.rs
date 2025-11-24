@@ -214,18 +214,16 @@ impl WorkflowExecutor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use servo_storage::TenantId;
     use std::time::Duration;
-    use uuid::Uuid;
 
     #[test]
     fn test_executor_creation() {
         // This test requires a real database connection
         // In practice, you'd use a test database or mock
-        let timeout = Duration::from_secs(600);
+        let _timeout = Duration::from_secs(600);
         // let storage = Arc::new(PostgresStorage::new("postgresql://test").await.unwrap());
-        // let executor = WorkflowExecutor::new(storage, timeout);
-        // assert_eq!(executor.timeout, timeout);
+        // let executor = WorkflowExecutor::new(storage, _timeout);
+        // assert_eq!(executor.timeout, _timeout);
     }
 
     #[test]

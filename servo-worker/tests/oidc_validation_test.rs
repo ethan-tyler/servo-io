@@ -15,12 +15,12 @@ use axum::{
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
 use serde_json::json;
-use servo_storage::{models::ExecutionModel, postgres::PostgresStorage, TenantId};
+use servo_storage::postgres::PostgresStorage;
 use servo_worker::handler::{execute_handler, AppState};
 use servo_worker::{config::OidcConfig, executor::WorkflowExecutor, oidc::OidcValidator};
 use std::sync::Arc;
 use std::time::Duration;
-use tower::ServiceExt;
+use tower::util::ServiceExt;
 use uuid::Uuid;
 use wiremock::{
     matchers::{method, path},
@@ -111,7 +111,7 @@ fn create_expired_token(audience: &str, email: &str) -> String {
 }
 
 /// Create a token with wrong audience
-fn create_wrong_audience_token(audience: &str, email: &str) -> String {
+fn create_wrong_audience_token(_audience: &str, email: &str) -> String {
     let claims = json!({
         "iss": "https://accounts.google.com",
         "aud": "https://wrong-audience.example.com",
@@ -234,7 +234,7 @@ async fn test_worker_requires_oidc_token() {
 #[tokio::test]
 #[ignore] // Requires database connection
 async fn test_worker_validates_oidc_signature() {
-    let (_mock_server, state, audience) = setup_test_env().await;
+    let (_mock_server, state, _audience) = setup_test_env().await;
 
     let (body, signature) = create_signed_payload(&state.hmac_secret);
 

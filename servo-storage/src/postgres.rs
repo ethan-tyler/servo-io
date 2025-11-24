@@ -461,7 +461,7 @@ impl PostgresStorage {
                         "#,
                     )
                     .bind(execution.workflow_id)
-                    .bind(&execution.idempotency_key.as_ref().expect("idempotency_key must be Some if conflict occurred"))
+                    .bind(execution.idempotency_key.as_ref().expect("idempotency_key must be Some if conflict occurred"))
                     .fetch_one(&mut **tx)
                     .await
                     .map_err(map_db_error)?;
