@@ -11,7 +11,7 @@ description = "GCP adapter for Servo (Cloud Tasks, Cloud Run)"
 
 [dependencies]
 # Async runtime
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["sync"] }
 async-trait = { workspace = true }
 
 # HTTP client
@@ -28,9 +28,33 @@ thiserror = { workspace = true }
 # Logging/tracing
 tracing = { workspace = true }
 
+# Cryptography (HMAC signing, JWT)
+hmac = "0.12"
+sha2 = "0.10"
+hex = "0.4"
+subtle = "2.5"
+jsonwebtoken = "9.2"
+base64 = "0.21"
+
+# UUID
+uuid = { workspace = true }
+
+# Date/time
+chrono = { workspace = true }
+
+# Random (for backoff jitter)
+rand = "0.8"
+
+# Metrics
+prometheus = { version = "0.13", features = ["process"] }
+lazy_static = "1.4"
+
 # Internal dependencies
 servo-core = { path = "../servo-core" }
 servo-runtime = { path = "../servo-runtime" }
+servo-storage = { path = "../servo-storage" }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util", "macros"] }
+testcontainers = { workspace = true }
+testcontainers-modules = { workspace = true }

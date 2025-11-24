@@ -4,6 +4,7 @@ use clap::{Parser, Subcommand};
 
 mod commands;
 mod config;
+mod polling;
 
 #[derive(Parser)]
 #[command(name = "servo")]
@@ -51,6 +52,18 @@ enum Commands {
         /// Execution parameters (JSON)
         #[arg(long)]
         params: Option<String>,
+
+        /// Wait for execution to complete before returning
+        #[arg(long)]
+        wait: bool,
+
+        /// Timeout in seconds when using --wait (default: 600)
+        #[arg(long, default_value = "600")]
+        timeout: u64,
+
+        /// Poll interval in seconds when using --wait (default: 2)
+        #[arg(long, default_value = "2")]
+        poll_interval: u64,
     },
 
     /// Check workflow execution status
@@ -103,8 +116,35 @@ async fn main() -> anyhow::Result<()> {
         Commands::Run {
             workflow_name,
             params,
+            wait,
+            timeout,
+            poll_interval,
         } => {
-            commands::run::execute(&workflow_name, params.as_deref()).await?;
+            let database_url = cli
+                .database_url
+                .ok_or_else(|| anyhow::anyhow!("DATABASE_URL not set"))?;
+
+            let status = commands::run::execute(
+                &workflow_name,
+                params.as_deref(),
+                wait,
+                timeout,
+                poll_interval,
+                &database_url,
+            )
+            .await?;
+
+            // Convert execution status to exit code
+            use commands::run::ExecutionStatus;
+            match status {
+                ExecutionStatus::Succeeded(_) => std::process::exit(0),
+                ExecutionStatus::Failed(_)
+                | ExecutionStatus::Timeout(_)
+                | ExecutionStatus::Cancelled(_) => std::process::exit(1),
+                ExecutionStatus::AsyncStarted(_) => {
+                    // No exit - execution started async
+                }
+            }
         }
         Commands::Status {
             execution_id,

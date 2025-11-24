@@ -39,6 +39,7 @@
 
 use crate::retry::RetryPolicy;
 use crate::state_machine::ExecutionState;
+use crate::task_enqueuer::TaskEnqueuer;
 use crate::Result;
 use chrono::Utc;
 use servo_storage::{ExecutionModel, PostgresStorage, TenantId};
@@ -56,6 +57,7 @@ use uuid::Uuid;
 pub struct ExecutionOrchestrator {
     storage: Arc<PostgresStorage>,
     retry_policy: RetryPolicy,
+    task_enqueuer: Option<Arc<dyn TaskEnqueuer>>,
 }
 
 impl ExecutionOrchestrator {
@@ -69,6 +71,26 @@ impl ExecutionOrchestrator {
         Self {
             storage,
             retry_policy,
+            task_enqueuer: None,
+        }
+    }
+
+    /// Create a new execution orchestrator with a task enqueuer
+    ///
+    /// # Arguments
+    ///
+    /// * `storage` - PostgreSQL storage instance (must be configured with servo_app role)
+    /// * `retry_policy` - Retry policy for handling transient failures
+    /// * `task_enqueuer` - Task enqueuer for triggering workflow execution (e.g., Cloud Tasks)
+    pub fn with_task_enqueuer(
+        storage: Arc<PostgresStorage>,
+        retry_policy: RetryPolicy,
+        task_enqueuer: Arc<dyn TaskEnqueuer>,
+    ) -> Self {
+        Self {
+            storage,
+            retry_policy,
+            task_enqueuer: Some(task_enqueuer),
         }
     }
 
@@ -120,15 +142,19 @@ impl ExecutionOrchestrator {
     /// Creates an execution record in the database with initial state `Pending`.
     /// The operation is performed within a transaction to ensure atomicity.
     ///
+    /// If an idempotency key is provided, the orchestrator will check for an existing
+    /// execution with the same (tenant_id, workflow_id, idempotency_key) tuple and
+    /// return the existing execution_id if found, preventing duplicate executions.
+    ///
     /// # Arguments
     ///
     /// * `workflow_id` - UUID of the workflow to execute
     /// * `tenant_id` - Tenant ID for multi-tenant isolation (enforced by RLS)
-    /// * `idempotency_key` - Optional idempotency key (future: prevent duplicate executions)
+    /// * `idempotency_key` - Optional idempotency key for preventing duplicate executions
     ///
     /// # Returns
     ///
-    /// The UUID of the created execution
+    /// The UUID of the created (or existing) execution
     ///
     /// # Errors
     ///
@@ -153,17 +179,14 @@ impl ExecutionOrchestrator {
         let start = Instant::now();
         tracing::debug!("Starting execution");
 
-        // Note: idempotency_key parameter accepted for API compatibility but not yet enforced.
-        // P1 implementation: Check idempotency_key against executions.idempotency_key column
-        // to prevent duplicate execution creation. Return existing execution_id if key matches.
-        let _ = idempotency_key; // Suppress unused parameter warning
-
         // Create execution in database with Pending state
+        // Use atomic create_or_get_existing to handle idempotency without race conditions
         let execution = ExecutionModel {
             id: Uuid::new_v4(),
             workflow_id,
             state: ExecutionState::Pending.into(),
             tenant_id: Some(tenant_id.as_str().to_string()),
+            idempotency_key: idempotency_key.clone(),
             started_at: None, // Will be set when transitioning to Running
             completed_at: None,
             error_message: None,
@@ -171,21 +194,77 @@ impl ExecutionOrchestrator {
             updated_at: Utc::now(),
         };
 
-        self.storage
-            .create_execution(&execution, tenant_id)
-            .await
-            .map_err(|e| Self::map_storage_error(e, "Failed to create execution"))?;
+        let (execution_id, was_created) = if idempotency_key.is_some() {
+            // Use atomic idempotent create for requests with idempotency keys
+            self.storage
+                .create_execution_or_get_existing(&execution, tenant_id)
+                .await
+                .map_err(|e| Self::map_storage_error(e, "Failed to create execution"))?
+        } else {
+            // No idempotency key - use regular create
+            self.storage
+                .create_execution(&execution, tenant_id)
+                .await
+                .map_err(|e| Self::map_storage_error(e, "Failed to create execution"))?;
+            (execution.id, true)
+        };
+
+        if !was_created {
+            tracing::info!(
+                execution_id = %execution_id,
+                workflow_id = %workflow_id,
+                idempotency_key = ?idempotency_key,
+                "Returning existing execution (idempotency hit)"
+            );
+            return Ok(execution_id);
+        }
 
         let elapsed = start.elapsed();
         if elapsed.as_millis() > 100 {
             warn!(
-                execution_id = %execution.id,
+                execution_id = %execution_id,
                 duration_ms = elapsed.as_millis(),
                 "Slow execution creation"
             );
         }
-        tracing::debug!(execution_id = %execution.id, "Execution created");
-        Ok(execution.id)
+        tracing::debug!(execution_id = %execution_id, "Execution created");
+
+        // Enqueue task for execution if task enqueuer is configured
+        if let Some(enqueuer) = &self.task_enqueuer {
+            tracing::debug!("Enqueueing execution task");
+
+            // TODO: Compile execution plan from workflow DAG
+            // Currently passes empty vec - worker must fetch workflow and compile plan
+            // Future: Pre-compile topological sort of workflow assets here
+            let execution_plan = Vec::new();
+
+            // Idempotency is enforced at orchestrator level via atomic insert
+            // The key is passed to task enqueuer for completeness
+            enqueuer
+                .enqueue(
+                    execution_id,
+                    workflow_id,
+                    tenant_id,
+                    idempotency_key.clone(),
+                    execution_plan,
+                )
+                .await
+                .map_err(|e| {
+                    error!(
+                        execution_id = %execution_id,
+                        error = %e,
+                        "Failed to enqueue execution task"
+                    );
+                    crate::Error::Internal(format!("Failed to enqueue task: {}", e))
+                })?;
+
+            tracing::debug!(
+                execution_id = %execution_id,
+                "Execution task enqueued successfully"
+            );
+        }
+
+        Ok(execution_id)
     }
 
     /// Transition execution to a new state
