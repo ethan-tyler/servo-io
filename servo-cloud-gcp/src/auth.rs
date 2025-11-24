@@ -13,12 +13,16 @@ use tokio::sync::RwLock;
 struct ServiceAccountCredentials {
     #[serde(rename = "type")]
     account_type: String,
+    #[allow(dead_code)]
     project_id: String,
     private_key_id: String,
     private_key: String,
     client_email: String,
+    #[allow(dead_code)]
     client_id: String,
+    #[allow(dead_code)]
     auth_uri: String,
+    #[allow(dead_code)]
     token_uri: String,
 }
 
