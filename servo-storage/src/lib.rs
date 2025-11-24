@@ -3,12 +3,15 @@
 //! Metadata storage for Servo using PostgreSQL with row-level security
 //! for multi-tenancy.
 
+pub mod circuit_breaker;
+pub mod metrics;
 pub mod migrations;
 pub mod models;
 pub mod postgres;
 pub mod tenant;
 
 // Re-export commonly used types
+pub use circuit_breaker::CircuitBreakerConfig;
 pub use models::{AssetModel, ExecutionModel, WorkflowModel};
 pub use postgres::PostgresStorage;
 pub use tenant::TenantId;
@@ -45,4 +48,7 @@ pub enum Error {
 
     #[error("Connection failed: {0}")]
     ConnectionFailed(String),
+
+    #[error("Circuit breaker is open, rejecting database operation")]
+    CircuitOpen,
 }
