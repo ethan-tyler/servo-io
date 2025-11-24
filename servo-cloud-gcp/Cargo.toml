@@ -33,7 +33,7 @@ hmac = "0.12"
 sha2 = "0.10"
 hex = "0.4"
 subtle = "2.5"
-jsonwebtoken = "9.2"
+jsonwebtoken = "10.2"
 base64 = "0.21"
 
 # UUID
