@@ -1,6 +1,7 @@
 //! Cloud Tasks queue implementation
 
 use crate::auth::GcpAuth;
+use crate::metrics::{ENQUEUE_DURATION, ENQUEUE_RETRIES, ENQUEUE_TOTAL};
 use crate::signing::sign_payload;
 use crate::{Error, Result};
 use async_trait::async_trait;
@@ -50,7 +51,12 @@ impl CloudTasksQueue {
         hmac_secret: String,
     ) -> Result<Self> {
         let auth = GcpAuth::from_service_account_json(service_account_json)?;
-        let http_client = reqwest::Client::new();
+
+        // Configure HTTP client with 30-second timeout to prevent hangs
+        let http_client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .map_err(|e| Error::Internal(format!("Failed to create HTTP client: {}", e)))?;
 
         Ok(Self {
             project_id,
@@ -66,7 +72,7 @@ impl CloudTasksQueue {
     /// Enqueue a task to execute a workflow
     ///
     /// Creates a Cloud Tasks HTTP POST task with:
-    /// - Authorization header containing OIDC token for worker authentication
+    /// - OIDC authentication automatically injected by Cloud Tasks via service account
     /// - X-Servo-Signature header containing HMAC signature for payload integrity
     /// - JSON body with execution details
     ///
@@ -97,6 +103,9 @@ impl CloudTasksQueue {
         idempotency_key: Option<String>,
         execution_plan: Vec<Uuid>,
     ) -> Result<String> {
+        // Start total duration timer
+        let _total_timer = ENQUEUE_DURATION.with_label_values(&["total"]).start_timer();
+
         // 1. Create task payload
         let payload = TaskPayload {
             execution_id,
@@ -113,9 +122,8 @@ impl CloudTasksQueue {
         // 2. Sign payload with HMAC for integrity verification
         let signature = sign_payload(payload_bytes, &self.hmac_secret)?;
 
-        // 3. Generate OIDC token for worker authentication
+        // 3. Build target URL for Cloud Run worker
         let target_url = format!("{}/execute", self.worker_url);
-        let oidc_token = self.auth.generate_oidc_token(&target_url)?;
 
         tracing::info!(
             execution_id = %execution_id,
@@ -125,27 +133,51 @@ impl CloudTasksQueue {
             "Enqueueing execution task"
         );
 
-        // 4. Create Cloud Tasks task
-        let task_id = self
-            .create_cloud_task(&target_url, &oidc_token, &signature, payload_bytes)
-            .await?;
+        // 4. Create Cloud Tasks task (OIDC authentication handled by Cloud Tasks)
+        let result = self
+            .create_cloud_task(&target_url, &signature, payload_bytes)
+            .await;
 
-        tracing::info!(
-            execution_id = %execution_id,
-            task_id = %task_id,
-            "Task enqueued successfully"
-        );
+        // Record success or failure metrics
+        match &result {
+            Ok(task_id) => {
+                ENQUEUE_TOTAL
+                    .with_label_values(&["success", tenant_id])
+                    .inc();
+                tracing::info!(
+                    execution_id = %execution_id,
+                    task_id = %task_id,
+                    "Task enqueued successfully"
+                );
+            }
+            Err(e) => {
+                // Determine if it's a rate limit or generic failure
+                let status = if matches!(e, Error::Api(msg) if msg.contains("429")) {
+                    "rate_limit"
+                } else {
+                    "failure"
+                };
+                ENQUEUE_TOTAL
+                    .with_label_values(&[status, tenant_id])
+                    .inc();
+                tracing::error!(
+                    execution_id = %execution_id,
+                    error = %e,
+                    "Task enqueue failed"
+                );
+            }
+        }
 
-        Ok(task_id)
+        result
     }
 
     /// Create a Cloud Tasks HTTP POST task
     ///
     /// Calls the Cloud Tasks API with retries and proper error handling.
+    /// Cloud Tasks will automatically inject OIDC authentication using the service account.
     async fn create_cloud_task(
         &self,
         target_url: &str,
-        oidc_token: &str,
         hmac_signature: &str,
         payload: &[u8],
     ) -> Result<String> {
@@ -164,7 +196,6 @@ impl CloudTasksQueue {
                     "httpMethod": "POST",
                     "headers": {
                         "Content-Type": "application/json",
-                        "Authorization": format!("Bearer {}", oidc_token),
                         "X-Servo-Signature": hmac_signature,
                     },
                     "body": base64::engine::general_purpose::STANDARD.encode(payload),
@@ -205,6 +236,9 @@ impl CloudTasksQueue {
         loop {
             attempt += 1;
 
+            // Start API call timer
+            let api_timer = ENQUEUE_DURATION.with_label_values(&["api"]).start_timer();
+
             let response = self
                 .http_client
                 .post(api_url)
@@ -216,6 +250,7 @@ impl CloudTasksQueue {
                 .map_err(|e| Error::Internal(format!("HTTP request failed: {}", e)))?;
 
             let status = response.status();
+            drop(api_timer); // Stop timer
 
             // Success
             if status.is_success() {
@@ -238,7 +273,53 @@ impl CloudTasksQueue {
                 return Ok(task_name);
             }
 
-            // Client error (4xx) - don't retry
+            // Rate limit (429) - retry with Retry-After header if available
+            if status.as_u16() == 429 {
+                ENQUEUE_RETRIES.with_label_values(&["429"]).inc();
+                // Read Retry-After header before consuming response body
+                let retry_after_ms = if let Some(retry_after) = response.headers().get("retry-after") {
+                    retry_after
+                        .to_str()
+                        .ok()
+                        .and_then(|s| s.parse::<u64>().ok())
+                        .map(|secs| secs * 1000) // Convert seconds to milliseconds
+                } else {
+                    None
+                };
+
+                let body = response.text().await.unwrap_or_default();
+
+                if attempt >= MAX_RETRIES {
+                    return Err(Error::Api(format!(
+                        "Cloud Tasks API failed after {} attempts due to rate limiting. Last response: {} - {}",
+                        MAX_RETRIES, status, body
+                    )));
+                }
+
+                let delay_ms = retry_after_ms.unwrap_or(backoff_ms);
+
+                tracing::warn!(
+                    status = %status,
+                    attempt = attempt,
+                    max_retries = MAX_RETRIES,
+                    delay_ms = delay_ms,
+                    retry_after = ?retry_after_ms,
+                    "Cloud Tasks API rate limit exceeded, retrying after delay"
+                );
+
+                // Respect Retry-After header or use exponential backoff
+                tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms))
+                    .await;
+
+                // Continue exponential backoff for next attempt if no Retry-After header
+                if retry_after_ms.is_none() {
+                    backoff_ms *= 2;
+                }
+
+                continue;
+            }
+
+            // Other client errors (4xx) - don't retry
             if status.is_client_error() {
                 let body = response.text().await.unwrap_or_default();
                 return Err(Error::Api(format!(
@@ -249,6 +330,7 @@ impl CloudTasksQueue {
 
             // Server error (5xx) - retry with backoff
             if status.is_server_error() {
+                ENQUEUE_RETRIES.with_label_values(&["5xx"]).inc();
                 let body = response.text().await.unwrap_or_default();
 
                 if attempt >= MAX_RETRIES {

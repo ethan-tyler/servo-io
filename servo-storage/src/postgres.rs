@@ -354,15 +354,16 @@ impl PostgresStorage {
                 sqlx::query(
                     r#"
                     INSERT INTO executions (
-                        id, workflow_id, state, tenant_id, started_at,
+                        id, workflow_id, state, tenant_id, idempotency_key, started_at,
                         completed_at, error_message, created_at, updated_at
-                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
                     "#,
                 )
                 .bind(execution.id)
                 .bind(execution.workflow_id)
                 .bind(&execution.state)
                 .bind(&tenant_str)
+                .bind(&execution.idempotency_key)
                 .bind(execution.started_at)
                 .bind(execution.completed_at)
                 .bind(&execution.error_message)
@@ -373,6 +374,100 @@ impl PostgresStorage {
                 .map_err(map_db_error)?;
 
                 Ok(())
+            })
+        })
+        .await
+    }
+
+    /// Create execution or return existing one if idempotency key matches (atomic)
+    ///
+    /// This method uses `INSERT ... ON CONFLICT DO NOTHING` to atomically handle
+    /// idempotency without race conditions. If an execution with the same
+    /// (tenant_id, workflow_id, idempotency_key) already exists, it returns the
+    /// existing execution instead of creating a new one.
+    ///
+    /// # Returns
+    ///
+    /// Returns `(execution_id, was_created)` where:
+    /// - `execution_id`: UUID of the execution (new or existing)
+    /// - `was_created`: true if a new execution was created, false if existing was returned
+    ///
+    /// # Arguments
+    ///
+    /// * `execution` - The execution model to create
+    /// * `tenant_id` - Tenant identifier for RLS enforcement
+    #[instrument(skip(self, execution, tenant_id), fields(tenant = %tenant_id.as_str(), execution_id = %execution.id))]
+    pub async fn create_execution_or_get_existing(
+        &self,
+        execution: &ExecutionModel,
+        tenant_id: &TenantId,
+    ) -> Result<(Uuid, bool)> {
+        Self::validate_execution_state(&execution.state)?;
+        let execution = execution.clone();
+        let tenant_str = tenant_id.as_str().to_string();
+
+        self.with_tenant_context(tenant_id, |tx| {
+            Box::pin(async move {
+                // Attempt to insert with ON CONFLICT DO NOTHING
+                // This makes the operation atomic and eliminates TOCTOU race conditions
+                let result = sqlx::query(
+                    r#"
+                    INSERT INTO executions (
+                        id, workflow_id, state, tenant_id, idempotency_key, started_at,
+                        completed_at, error_message, created_at, updated_at
+                    )
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                    ON CONFLICT (tenant_id, workflow_id, idempotency_key)
+                    WHERE idempotency_key IS NOT NULL
+                    DO NOTHING
+                    "#,
+                )
+                .bind(execution.id)
+                .bind(execution.workflow_id)
+                .bind(&execution.state)
+                .bind(&tenant_str)
+                .bind(&execution.idempotency_key)
+                .bind(execution.started_at)
+                .bind(execution.completed_at)
+                .bind(&execution.error_message)
+                .bind(execution.created_at)
+                .bind(execution.updated_at)
+                .execute(&mut **tx)
+                .await
+                .map_err(map_db_error)?;
+
+                // Check if the insert was successful (rows_affected > 0)
+                if result.rows_affected() > 0 {
+                    // New execution was created
+                    tracing::info!(
+                        execution_id = %execution.id,
+                        workflow_id = %execution.workflow_id,
+                        "Created new execution"
+                    );
+                    Ok((execution.id, true))
+                } else {
+                    // Conflict occurred, fetch the existing execution
+                    tracing::info!(
+                        workflow_id = %execution.workflow_id,
+                        idempotency_key = ?execution.idempotency_key,
+                        "Idempotency conflict detected, fetching existing execution"
+                    );
+
+                    let existing = sqlx::query_as::<_, ExecutionModel>(
+                        r#"
+                        SELECT id, workflow_id, state, tenant_id, idempotency_key, started_at, completed_at, error_message, created_at, updated_at
+                        FROM executions
+                        WHERE workflow_id = $1 AND idempotency_key = $2
+                        "#,
+                    )
+                    .bind(execution.workflow_id)
+                    .bind(&execution.idempotency_key.as_ref().expect("idempotency_key must be Some if conflict occurred"))
+                    .fetch_one(&mut **tx)
+                    .await
+                    .map_err(map_db_error)?;
+
+                    Ok((existing.id, false))
+                }
             })
         })
         .await
@@ -701,7 +796,7 @@ impl PostgresStorage {
             Box::pin(async move {
                 let execution = sqlx::query_as::<_, ExecutionModel>(
                     r#"
-                    SELECT id, workflow_id, state, tenant_id, started_at, completed_at, error_message, created_at, updated_at
+                    SELECT id, workflow_id, state, tenant_id, idempotency_key, started_at, completed_at, error_message, created_at, updated_at
                     FROM executions
                     WHERE id = $1
                     "#,
@@ -734,7 +829,7 @@ impl PostgresStorage {
             Box::pin(async move {
                 let executions = sqlx::query_as::<_, ExecutionModel>(
                     r#"
-                    SELECT id, workflow_id, state, tenant_id, started_at, completed_at, error_message, created_at, updated_at
+                    SELECT id, workflow_id, state, tenant_id, idempotency_key, started_at, completed_at, error_message, created_at, updated_at
                     FROM executions
                     ORDER BY created_at DESC, id DESC
                     LIMIT $1 OFFSET $2
@@ -769,7 +864,7 @@ impl PostgresStorage {
             Box::pin(async move {
                 let executions = sqlx::query_as::<_, ExecutionModel>(
                     r#"
-                    SELECT id, workflow_id, state, tenant_id, started_at, completed_at, error_message, created_at, updated_at
+                    SELECT id, workflow_id, state, tenant_id, idempotency_key, started_at, completed_at, error_message, created_at, updated_at
                     FROM executions
                     WHERE workflow_id = $1
                     ORDER BY created_at DESC, id DESC
@@ -784,6 +879,42 @@ impl PostgresStorage {
                 .map_err(map_db_error)?;
 
                 Ok(executions)
+            })
+        })
+        .await
+    }
+
+    /// Find an execution by workflow_id and idempotency_key
+    ///
+    /// Returns the existing execution if an idempotency_key matches, or None if not found.
+    /// This is used to enforce idempotency for execution creation.
+    ///
+    /// This operation enforces tenant isolation via RLS policies.
+    #[instrument(skip(self, tenant_id, idempotency_key), fields(tenant = %tenant_id.as_str(), workflow_id = %workflow_id))]
+    pub async fn find_execution_by_idempotency_key(
+        &self,
+        workflow_id: Uuid,
+        idempotency_key: &str,
+        tenant_id: &TenantId,
+    ) -> Result<Option<ExecutionModel>> {
+        let idempotency_key = idempotency_key.to_string();
+
+        self.with_tenant_context(tenant_id, |tx| {
+            Box::pin(async move {
+                let execution = sqlx::query_as::<_, ExecutionModel>(
+                    r#"
+                    SELECT id, workflow_id, state, tenant_id, idempotency_key, started_at, completed_at, error_message, created_at, updated_at
+                    FROM executions
+                    WHERE workflow_id = $1 AND idempotency_key = $2
+                    "#,
+                )
+                .bind(workflow_id)
+                .bind(&idempotency_key)
+                .fetch_optional(&mut **tx)
+                .await
+                .map_err(map_db_error)?;
+
+                Ok(execution)
             })
         })
         .await
@@ -1809,6 +1940,7 @@ mod tests {
             workflow_id: workflow.id,
             state: "running".to_string(),
             tenant_id: Some("tenant1".to_string()),
+            idempotency_key: None,
             started_at: Some(Utc::now()),
             completed_at: None,
             error_message: None,

@@ -45,6 +45,10 @@ chrono = { workspace = true }
 # Random (for backoff jitter)
 rand = "0.8"
 
+# Metrics
+prometheus = { version = "0.13", features = ["process"] }
+lazy_static = "1.4"
+
 # Internal dependencies
 servo-core = { path = "../servo-core" }
 servo-runtime = { path = "../servo-runtime" }

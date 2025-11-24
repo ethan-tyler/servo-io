@@ -31,7 +31,7 @@ use axum::{
     routing::{get, post},
     Router,
 };
-use handler::{execute_handler, health_handler, AppState};
+use handler::{execute_handler, health_handler, metrics_handler, ready_handler, AppState};
 use servo_storage::PostgresStorage;
 use std::sync::Arc;
 use std::time::Duration;
@@ -114,6 +114,8 @@ async fn main() {
     let app = Router::new()
         .route("/execute", post(execute_handler))
         .route("/health", get(health_handler))
+        .route("/ready", get(ready_handler))
+        .route("/metrics", get(metrics_handler))
         .layer(TraceLayer::new_for_http())
         .layer(TimeoutLayer::new(Duration::from_secs(610))) // Slightly longer than execution timeout
         .layer(RequestBodyLimitLayer::new(10 * 1024 * 1024)) // 10MB max request body

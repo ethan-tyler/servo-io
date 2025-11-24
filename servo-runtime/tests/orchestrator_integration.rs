@@ -448,26 +448,70 @@ async fn test_concurrent_state_transitions() {
 
 #[tokio::test]
 #[ignore]
-async fn test_idempotency_key_warning() {
+async fn test_idempotency_enforcement() {
     let storage = setup_app_role_storage().await;
     let orchestrator = ExecutionOrchestrator::new(storage.clone(), RetryPolicy::default());
     let tenant = unique_tenant();
 
     let wf_id = create_test_workflow(&storage, &tenant).await;
 
-    // Start execution with idempotency key (should log warning but not fail)
-    let exec_id = orchestrator
+    // Start execution with idempotency key
+    let exec_id_1 = orchestrator
         .start_execution(wf_id, &tenant, Some("test-key-123".to_string()))
         .await
-        .expect("Should succeed even with idempotency key (not yet implemented)");
+        .expect("Should succeed with idempotency key");
 
     // Verify execution was created
     let execution = storage
-        .get_execution(exec_id, &tenant)
+        .get_execution(exec_id_1, &tenant)
         .await
         .expect("Failed to get execution");
     assert_eq!(execution.state, "pending");
+    assert_eq!(execution.idempotency_key, Some("test-key-123".to_string()));
 
-    // Note: When idempotency is implemented (P1), this test should verify
-    // that duplicate keys return the existing execution instead of creating a new one
+    // Try to create another execution with the same idempotency key
+    // Should return the existing execution_id instead of creating a new one
+    let exec_id_2 = orchestrator
+        .start_execution(wf_id, &tenant, Some("test-key-123".to_string()))
+        .await
+        .expect("Should return existing execution for duplicate idempotency key");
+
+    // Verify both IDs are the same (idempotency enforced)
+    assert_eq!(
+        exec_id_1, exec_id_2,
+        "Duplicate idempotency key should return same execution ID"
+    );
+
+    // Verify only one execution exists
+    let executions = storage
+        .list_workflow_executions(wf_id, &tenant, 100, 0)
+        .await
+        .expect("Failed to list executions");
+    assert_eq!(
+        executions.len(),
+        1,
+        "Should have only one execution despite duplicate key"
+    );
+
+    // Different idempotency key should create a new execution
+    let exec_id_3 = orchestrator
+        .start_execution(wf_id, &tenant, Some("different-key-456".to_string()))
+        .await
+        .expect("Should succeed with different idempotency key");
+
+    assert_ne!(
+        exec_id_1, exec_id_3,
+        "Different idempotency key should create new execution"
+    );
+
+    // No idempotency key should also create a new execution
+    let exec_id_4 = orchestrator
+        .start_execution(wf_id, &tenant, None)
+        .await
+        .expect("Should succeed without idempotency key");
+
+    assert_ne!(
+        exec_id_1, exec_id_4,
+        "No idempotency key should create new execution"
+    );
 }

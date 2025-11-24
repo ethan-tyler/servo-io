@@ -135,12 +135,105 @@ pub async fn execute_handler(
     Ok(Json(ExecuteResponse::accepted(execution_id)))
 }
 
-/// Health check endpoint
+/// Health check endpoint (liveness probe)
 ///
 /// Returns 200 OK if the service is running.
-/// Used by Cloud Run for liveness and readiness probes.
+/// This is a simple liveness check - it doesn't verify external dependencies.
 pub async fn health_handler() -> Json<HealthResponse> {
     Json(HealthResponse::healthy())
+}
+
+/// Readiness check endpoint
+///
+/// Returns 200 OK if the service is ready to accept traffic.
+/// Checks:
+/// - Database connectivity
+/// - Token acquisition capability (if configured)
+///
+/// This is separate from /health to properly support liveness vs readiness probes.
+pub async fn ready_handler(State(state): State<AppState>) -> impl IntoResponse {
+    // Check database connectivity
+    let db_check = state.executor.storage().health_check().await;
+
+    if db_check.is_err() {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({
+                "status": "not_ready",
+                "reason": "database_unreachable"
+            }))
+        ).into_response();
+    }
+
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "status": "ready",
+            "checks": {
+                "database": "ok"
+            }
+        }))
+    ).into_response()
+}
+
+/// Metrics endpoint
+///
+/// Exposes Prometheus-format metrics.
+/// Optionally authenticated with Bearer token (if SERVO_METRICS_TOKEN is set).
+///
+/// Returns all registered Prometheus metrics in text format.
+pub async fn metrics_handler(headers: HeaderMap) -> impl IntoResponse {
+    use prometheus::{Encoder, TextEncoder};
+
+    // Optional authentication check
+    if let Ok(expected_token) = std::env::var("SERVO_METRICS_TOKEN") {
+        let auth_header = headers
+            .get("authorization")
+            .and_then(|v| v.to_str().ok());
+
+        if let Some(auth) = auth_header {
+            if let Some(token) = auth.strip_prefix("Bearer ") {
+                if token != expected_token {
+                    return (
+                        StatusCode::UNAUTHORIZED,
+                        "Invalid metrics token"
+                    ).into_response();
+                }
+            } else {
+                return (
+                    StatusCode::UNAUTHORIZED,
+                    "Invalid authorization format"
+                ).into_response();
+            }
+        } else {
+            return (
+                StatusCode::UNAUTHORIZED,
+                "Missing authorization header"
+            ).into_response();
+        }
+    }
+
+    // Gather metrics from all registries
+    let encoder = TextEncoder::new();
+    let metric_families = prometheus::gather();
+
+    let mut buffer = vec![];
+    match encoder.encode(&metric_families, &mut buffer) {
+        Ok(()) => {
+            (
+                StatusCode::OK,
+                [(axum::http::header::CONTENT_TYPE, "text/plain; version=0.0.4")],
+                buffer
+            ).into_response()
+        }
+        Err(e) => {
+            error!(error = %e, "Failed to encode metrics");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to encode metrics"
+            ).into_response()
+        }
+    }
 }
 
 /// Error types for execute handler

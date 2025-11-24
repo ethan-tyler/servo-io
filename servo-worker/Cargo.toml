@@ -55,6 +55,9 @@ parking_lot = "0.12" # High-performance RwLock for JWKS caching
 # HTTP client (for JWKS fetching)
 reqwest = { workspace = true }
 
+# Metrics
+prometheus = { version = "0.13", features = ["process"] }
+
 # Internal dependencies
 servo-core = { path = "../servo-core" }
 servo-runtime = { path = "../servo-runtime" }

@@ -6,6 +6,7 @@
 pub mod concurrency;
 pub mod converters;
 pub mod executor;
+pub mod metrics;
 pub mod orchestrator;
 pub mod retry;
 pub mod state_machine;

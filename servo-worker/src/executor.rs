@@ -48,6 +48,11 @@ impl WorkflowExecutor {
         Self { storage, timeout }
     }
 
+    /// Get a reference to the storage for health checks
+    pub fn storage(&self) -> &Arc<PostgresStorage> {
+        &self.storage
+    }
+
     /// Execute a workflow with timeout enforcement
     ///
     /// This method:
