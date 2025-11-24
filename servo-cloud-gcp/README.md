@@ -46,14 +46,83 @@ let task_name = queue
 
 ## Configuration
 
+### Authentication
+
 Set up GCP credentials:
 
 ```bash
-# Using service account key
-export GOOGLE_APPLICATION_CREDENTIALS=/path/to/key.json
+# Production: Use Workload Identity (Cloud Run / GKE)
+# No environment variables needed - automatic!
 
-# Or use Application Default Credentials (ADC)
+# Development: Use Application Default Credentials (ADC)
 gcloud auth application-default login
+
+# Legacy: Service account key (NOT recommended for production)
+export GOOGLE_APPLICATION_CREDENTIALS=/path/to/key.json
+```
+
+**⚠️ Recommendation**: Use [Workload Identity](../docs/WORKLOAD_IDENTITY_MIGRATION.md) in production
+to eliminate JSON key files.
+
+### Secret Manager Integration (Recommended)
+
+For production deployments, use GCP Secret Manager to store HMAC secrets instead of environment variables:
+
+```rust
+use servo_cloud_gcp::{GcpAuth, secrets::SecretManager};
+use std::sync::Arc;
+
+// Initialize auth
+let auth = Arc::new(GcpAuth::from_environment()?);
+
+// Initialize Secret Manager
+let secret_manager = SecretManager::new(
+    "my-project".to_string(),
+    "servo-hmac-secret".to_string(),  // Secret name in Secret Manager
+    auth.clone(),
+)?;
+
+// Initialize secrets with startup validation
+secret_manager.initialize().await?;
+
+// Use in your application
+let current_secret = secret_manager.get_current_secret().await?;
+```
+
+**Features**:
+
+- ✅ Automatic secret rotation support (current + previous versions)
+- ✅ 5-minute refresh interval (no restart needed)
+- ✅ Startup validation (minimum 32-byte length, entropy checks)
+- ✅ Fail-closed behavior on missing/invalid secrets
+- ✅ Zero-downtime rotation window
+
+**Setup**:
+
+```bash
+# Create secret in Secret Manager
+echo -n "your-strong-random-secret-min-32-bytes" | \
+  gcloud secrets create servo-hmac-secret \
+    --data-file=- \
+    --project=my-project
+
+# Grant access to service account
+gcloud secrets add-iam-policy-binding servo-hmac-secret \
+    --member="serviceAccount:servo-worker@my-project.iam.gserviceaccount.com" \
+    --role="roles/secretmanager.secretAccessor"
+```
+
+**Rotation Procedure**:
+
+```bash
+# 1. Add new secret version
+echo -n "new-secret-value" | \
+  gcloud secrets versions add servo-hmac-secret --data-file=-
+
+# 2. Wait 5 minutes for all instances to refresh (automatic)
+
+# 3. Destroy old version
+gcloud secrets versions destroy 1 --secret=servo-hmac-secret
 ```
 
 ## Required GCP APIs

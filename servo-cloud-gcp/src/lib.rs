@@ -9,6 +9,7 @@ pub mod executor;
 pub mod metrics;
 pub mod monitoring;
 pub mod queue;
+pub mod secrets;
 pub mod signing;
 
 // Re-export commonly used types
