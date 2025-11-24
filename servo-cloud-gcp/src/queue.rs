@@ -40,6 +40,7 @@ pub struct CloudTasksQueue {
     auth: GcpAuth,
     hmac_secret: String,
     http_client: reqwest::Client,
+    circuit_breaker: servo_storage::circuit_breaker::DatabaseCircuitBreaker,
 }
 
 impl CloudTasksQueue {
@@ -69,6 +70,14 @@ impl CloudTasksQueue {
             .build()
             .map_err(|e| Error::Internal(format!("Failed to create HTTP client: {}", e)))?;
 
+        // Initialize circuit breaker for Cloud Tasks API
+        let circuit_breaker_config =
+            servo_storage::circuit_breaker::CircuitBreakerConfig::from_env("cloud_tasks");
+        let circuit_breaker = servo_storage::circuit_breaker::DatabaseCircuitBreaker::new(
+            "cloud_tasks".to_string(),
+            circuit_breaker_config,
+        );
+
         Ok(Self {
             project_id,
             location,
@@ -77,6 +86,7 @@ impl CloudTasksQueue {
             auth,
             hmac_secret,
             http_client,
+            circuit_breaker,
         })
     }
 
@@ -265,15 +275,52 @@ impl CloudTasksQueue {
             // Start API call timer
             let api_timer = ENQUEUE_DURATION.with_label_values(&["api"]).start_timer();
 
-            let response = self
-                .http_client
-                .post(api_url)
-                .header("Authorization", format!("Bearer {}", access_token))
-                .header("Content-Type", "application/json")
-                .json(task)
-                .send()
-                .await
-                .map_err(|e| Error::Internal(format!("HTTP request failed: {}", e)))?;
+            // Wrap HTTP call with circuit breaker
+            let http_client = &self.http_client;
+            let api_url_clone = api_url.to_string();
+            let access_token_clone = access_token.to_string();
+            let task_clone = task.clone();
+
+            let response_result = self
+                .circuit_breaker
+                .call(|| async move {
+                    http_client
+                        .post(&api_url_clone)
+                        .header("Authorization", format!("Bearer {}", access_token_clone))
+                        .header("Content-Type", "application/json")
+                        .json(&task_clone)
+                        .send()
+                        .await
+                })
+                .await;
+
+            // Handle circuit breaker result
+            let response = match response_result {
+                Ok(resp) => resp,
+                Err(servo_storage::circuit_breaker::CircuitBreakerError::CircuitOpen) => {
+                    tracing::warn!("Circuit breaker is open for Cloud Tasks API");
+                    return Err(Error::Api(
+                        "Cloud Tasks API circuit breaker is open".to_string(),
+                    ));
+                }
+                Err(servo_storage::circuit_breaker::CircuitBreakerError::Failure(e)) => {
+                    // Classify error to determine if we should retry
+                    let status = crate::circuit_breaker::extract_status(&e);
+                    let is_network = crate::circuit_breaker::is_network_error(&e);
+                    let should_trip =
+                        crate::circuit_breaker::should_trip_breaker(status, is_network);
+
+                    tracing::warn!(
+                        status = ?status,
+                        is_network = is_network,
+                        should_trip_breaker = should_trip,
+                        error = %e,
+                        "Cloud Tasks API HTTP request failed"
+                    );
+
+                    return Err(Error::Internal(format!("HTTP request failed: {}", e)));
+                }
+            };
 
             let status = response.status();
             drop(api_timer); // Stop timer

@@ -81,6 +81,7 @@ pub struct GcpAuth {
     credentials: ServiceAccountCredentials,
     http_client: reqwest::Client,
     access_token_cache: Arc<RwLock<Option<AccessToken>>>,
+    circuit_breaker: servo_storage::circuit_breaker::DatabaseCircuitBreaker,
 }
 
 impl GcpAuth {
@@ -110,10 +111,19 @@ impl GcpAuth {
             .build()
             .map_err(|e| Error::Auth(format!("Failed to create HTTP client: {}", e)))?;
 
+        // Initialize circuit breaker for OAuth2 token endpoint
+        let circuit_breaker_config =
+            servo_storage::circuit_breaker::CircuitBreakerConfig::from_env("oauth2");
+        let circuit_breaker = servo_storage::circuit_breaker::DatabaseCircuitBreaker::new(
+            "oauth2".to_string(),
+            circuit_breaker_config,
+        );
+
         Ok(Self {
             credentials,
             http_client,
             access_token_cache: Arc::new(RwLock::new(None)),
+            circuit_breaker,
         })
     }
 
@@ -252,13 +262,50 @@ impl GcpAuth {
             ("assertion", &assertion),
         ];
 
-        let response = self
-            .http_client
-            .post("https://oauth2.googleapis.com/token")
-            .form(&params)
-            .send()
-            .await
-            .map_err(|e| Error::Auth(format!("Failed to request access token: {}", e)))?;
+        // Wrap HTTP call with circuit breaker
+        let http_client = &self.http_client;
+        let params_copy = params;
+
+        let response_result = self
+            .circuit_breaker
+            .call(|| async move {
+                http_client
+                    .post("https://oauth2.googleapis.com/token")
+                    .form(&params_copy)
+                    .send()
+                    .await
+            })
+            .await;
+
+        // Handle circuit breaker result
+        let response = match response_result {
+            Ok(resp) => resp,
+            Err(servo_storage::circuit_breaker::CircuitBreakerError::CircuitOpen) => {
+                tracing::warn!("Circuit breaker is open for OAuth2 token endpoint");
+                return Err(Error::Auth(
+                    "OAuth2 token endpoint circuit breaker is open".to_string(),
+                ));
+            }
+            Err(servo_storage::circuit_breaker::CircuitBreakerError::Failure(e)) => {
+                // Classify error to determine if we should trip breaker
+                let status = crate::circuit_breaker::extract_status(&e);
+                let is_network = crate::circuit_breaker::is_network_error(&e);
+                let should_trip = crate::circuit_breaker::should_trip_breaker(status, is_network);
+
+                tracing::warn!(
+                    status = ?status,
+                    is_network = is_network,
+                    should_trip_breaker = should_trip,
+                    error = %e,
+                    "OAuth2 token endpoint HTTP request failed"
+                );
+
+                return Err(Error::Auth(format!(
+                    "Failed to request access token: {}",
+                    e
+                )));
+            }
+        };
 
         if !response.status().is_success() {
             let status = response.status();
