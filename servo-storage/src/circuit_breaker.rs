@@ -44,7 +44,7 @@ impl Default for CircuitBreakerConfig {
 }
 
 impl CircuitBreakerConfig {
-    /// Load configuration from environment variables
+    /// Load configuration from environment variables with validation
     pub fn from_env(dependency: &str) -> Self {
         let failure_threshold = std::env::var(format!(
             "SERVO_CB_{}_FAILURE_THRESHOLD",
@@ -62,11 +62,32 @@ impl CircuitBreakerConfig {
         .and_then(|v| v.parse::<u64>().ok())
         .unwrap_or(30);
 
+        // Validate configuration
+        let failure_threshold = if failure_threshold == 0 {
+            warn!(
+                dependency = %dependency,
+                "Invalid failure_threshold=0, using default=5"
+            );
+            5
+        } else {
+            failure_threshold
+        };
+
+        let half_open_timeout_secs = if half_open_timeout_secs == 0 {
+            warn!(
+                dependency = %dependency,
+                "Invalid half_open_timeout=0, using default=30"
+            );
+            30
+        } else {
+            half_open_timeout_secs
+        };
+
         info!(
             dependency = %dependency,
             failure_threshold = %failure_threshold,
             half_open_timeout_secs = %half_open_timeout_secs,
-            "Loaded circuit breaker configuration"
+            "Circuit breaker configuration validated and loaded"
         );
 
         Self {
@@ -88,6 +109,8 @@ struct CircuitBreakerState {
     state: CircuitState,
     consecutive_failures: u32,
     last_failure_time: Option<Instant>,
+    /// Guard to prevent multiple concurrent half-open probes
+    half_open_probe_in_progress: bool,
 }
 
 /// Database circuit breaker wrapper
@@ -125,6 +148,7 @@ impl DatabaseCircuitBreaker {
                 state: CircuitState::Closed,
                 consecutive_failures: 0,
                 last_failure_time: None,
+                half_open_probe_in_progress: false,
             })),
         }
     }
@@ -147,9 +171,9 @@ impl DatabaseCircuitBreaker {
         Fut: std::future::Future<Output = Result<T, E>>,
         E: std::fmt::Display,
     {
-        // Check if circuit is open
-        {
-            let state = self.state.read().await;
+        // Check if circuit is open and handle half-open state
+        let is_half_open_probe = {
+            let mut state = self.state.write().await;
             if state.state == CircuitState::Open {
                 // Check if enough time has passed to try again (half-open)
                 if let Some(last_failure) = state.last_failure_time {
@@ -157,54 +181,108 @@ impl DatabaseCircuitBreaker {
                         // Still in open state, reject immediately
                         warn!(
                             dependency = %self.dependency_name,
+                            time_since_open = ?last_failure.elapsed(),
                             "Circuit breaker is open, rejecting request"
                         );
                         return Err(CircuitBreakerError::CircuitOpen);
                     }
-                    // Timeout elapsed, allow one request to test (half-open)
+
+                    // Timeout elapsed, check if we can attempt a half-open probe
+                    if state.half_open_probe_in_progress {
+                        // Another probe is already in progress, reject
+                        warn!(
+                            dependency = %self.dependency_name,
+                            "Half-open probe already in progress, rejecting request"
+                        );
+                        return Err(CircuitBreakerError::CircuitOpen);
+                    }
+
+                    // Set guard to prevent concurrent probes
+                    state.half_open_probe_in_progress = true;
+                    info!(
+                        dependency = %self.dependency_name,
+                        "Attempting half-open probe after timeout"
+                    );
+                    true
+                } else {
+                    false
                 }
+            } else {
+                false
             }
-        }
+        };
 
         // Execute the function
-        match f().await {
-            Ok(result) => {
-                // Success - reset failure count and close circuit
+        let result = f().await;
+
+        // Handle result and update state
+        match result {
+            Ok(value) => {
                 let mut state = self.state.write().await;
                 let was_open = state.state == CircuitState::Open;
+
+                // Success - reset failure count and close circuit
                 state.state = CircuitState::Closed;
                 state.consecutive_failures = 0;
                 state.last_failure_time = None;
+                state.half_open_probe_in_progress = false;
 
-                if was_open {
+                if was_open && is_half_open_probe {
+                    info!(
+                        dependency = %self.dependency_name,
+                        "Half-open probe succeeded, circuit closed"
+                    );
+                    // Track successful half-open probe
+                    crate::metrics::CIRCUIT_BREAKER_HALF_OPEN_ATTEMPTS
+                        .with_label_values(&[&self.dependency_name, "success"])
+                        .inc();
+                } else if was_open {
                     info!(
                         dependency = %self.dependency_name,
                         "Circuit breaker closed after successful request"
                     );
                 }
 
-                // Update metrics
+                // Update state gauge
                 crate::metrics::CIRCUIT_BREAKER_STATE
                     .with_label_values(&[&self.dependency_name])
                     .set(0.0); // 0 = closed
 
-                Ok(result)
+                Ok(value)
             }
             Err(e) => {
-                // Failure - increment counter and potentially open circuit
                 let mut state = self.state.write().await;
+
+                // Clear half-open probe guard if it was set
+                if is_half_open_probe {
+                    state.half_open_probe_in_progress = false;
+                    warn!(
+                        dependency = %self.dependency_name,
+                        error = %e,
+                        "Half-open probe failed, circuit remains open"
+                    );
+                    // Track failed half-open probe
+                    crate::metrics::CIRCUIT_BREAKER_HALF_OPEN_ATTEMPTS
+                        .with_label_values(&[&self.dependency_name, "failure"])
+                        .inc();
+                }
+
+                // Increment failure counter
                 state.consecutive_failures += 1;
                 state.last_failure_time = Some(Instant::now());
 
+                // Check if we should open the circuit
                 if state.consecutive_failures >= self.config.failure_threshold
                     && state.state == CircuitState::Closed
                 {
-                    // Open the circuit
+                    // Transition: Closed → Open
                     state.state = CircuitState::Open;
                     error!(
                         dependency = %self.dependency_name,
                         consecutive_failures = state.consecutive_failures,
-                        "Circuit breaker opened due to consecutive failures"
+                        threshold = self.config.failure_threshold,
+                        error = %e,
+                        "Circuit breaker transition: Closed → Open"
                     );
 
                     // Update metrics
@@ -214,10 +292,11 @@ impl DatabaseCircuitBreaker {
                     crate::metrics::CIRCUIT_BREAKER_STATE
                         .with_label_values(&[&self.dependency_name])
                         .set(1.0); // 1 = open
-                } else {
+                } else if state.state == CircuitState::Closed {
                     warn!(
                         dependency = %self.dependency_name,
                         consecutive_failures = state.consecutive_failures,
+                        threshold = self.config.failure_threshold,
                         error = %e,
                         "Request failed, circuit breaker remains closed"
                     );

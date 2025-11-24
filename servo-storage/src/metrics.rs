@@ -14,13 +14,12 @@ lazy_static! {
     /// Values:
     /// - 0 = closed (normal operation)
     /// - 1 = open (fail-fast mode)
-    /// - 2 = half-open (testing recovery)
     ///
     /// Labels:
     /// - dependency: Name of the protected dependency (e.g., "postgres")
     pub static ref CIRCUIT_BREAKER_STATE: GaugeVec = register_gauge_vec!(
         "servo_circuit_breaker_state",
-        "Circuit breaker state (0=closed, 1=open, 2=half-open)",
+        "Circuit breaker state (0=closed, 1=open)",
         &["dependency"]
     )
     .expect("Failed to register circuit_breaker_state metric");
@@ -37,4 +36,18 @@ lazy_static! {
         &["dependency"]
     )
     .expect("Failed to register circuit_breaker_opens_total metric");
+
+    /// Half-open probe attempts counter
+    ///
+    /// Tracks half-open state probe attempts and their outcomes.
+    ///
+    /// Labels:
+    /// - dependency: Name of the protected dependency (e.g., "postgres")
+    /// - result: "success" or "failure"
+    pub static ref CIRCUIT_BREAKER_HALF_OPEN_ATTEMPTS: IntCounterVec = register_int_counter_vec!(
+        "servo_circuit_breaker_half_open_attempts_total",
+        "Total number of half-open probe attempts",
+        &["dependency", "result"]
+    )
+    .expect("Failed to register circuit_breaker_half_open_attempts_total metric");
 }
