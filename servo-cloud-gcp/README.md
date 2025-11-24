@@ -125,6 +125,64 @@ echo -n "new-secret-value" | \
 gcloud secrets versions destroy 1 --secret=servo-hmac-secret
 ```
 
+### Circuit Breaker Configuration
+
+Circuit breakers protect against cascading failures by detecting consecutive errors and temporarily failing fast.
+Each external dependency has its own circuit breaker with separate configuration.
+
+**Protected Dependencies**:
+
+- **Cloud Tasks API**: Task enqueueing operations
+- **Secret Manager API**: Secret fetching operations
+- **OAuth2 Token Endpoint**: Token acquisition for GCP API authentication
+
+**Configuration (per dependency)**:
+
+```bash
+# Cloud Tasks circuit breaker
+export SERVO_CB_CLOUD_TASKS_FAILURE_THRESHOLD=5        # Default: 5
+export SERVO_CB_CLOUD_TASKS_HALF_OPEN_TIMEOUT_SECS=30  # Default: 30
+
+# Secret Manager circuit breaker
+export SERVO_CB_SECRET_MANAGER_FAILURE_THRESHOLD=5        # Default: 5
+export SERVO_CB_SECRET_MANAGER_HALF_OPEN_TIMEOUT_SECS=30  # Default: 30
+
+# OAuth2 token endpoint circuit breaker
+export SERVO_CB_OAUTH2_FAILURE_THRESHOLD=5        # Default: 5
+export SERVO_CB_OAUTH2_HALF_OPEN_TIMEOUT_SECS=30  # Default: 30
+```
+
+**Circuit Breaker States**:
+
+- **Closed** (normal): All requests pass through
+- **Open** (fail-fast): Rejects requests immediately after threshold consecutive failures
+- **Half-Open** (recovery): After timeout, allows single probe request to test recovery
+
+**Error Classification** (determines which errors trip the breaker):
+
+- ✅ **Trip breaker**: Network errors (timeout, connection refused, DNS), 5xx server errors, 429 rate limits
+- ❌ **Don't trip**: 4xx client errors (bad request, unauthorized, not found) - these indicate configuration issues
+
+**Metrics**:
+
+```promql
+# Circuit breaker state (0=closed, 1=open)
+servo_circuit_breaker_state{dependency="cloud_tasks|secret_manager|oauth2"}
+
+# Total circuit opens
+servo_circuit_breaker_opens_total{dependency="cloud_tasks|secret_manager|oauth2"}
+
+# Half-open probe attempts
+servo_circuit_breaker_half_open_attempts_total{dependency="cloud_tasks|secret_manager|oauth2",result="success|failure"}
+```
+
+**Recommendations**:
+
+- Use **defaults** (5 failures, 30s timeout) for most production workloads
+- **Increase threshold** (e.g., 10) for noisy dependencies with transient failures
+- **Decrease timeout** (e.g., 10s) for aggressive fail-fast behavior
+- Monitor `servo_circuit_breaker_opens_total` to detect dependency issues early
+
 ## Required GCP APIs
 
 Enable these APIs in your project:
