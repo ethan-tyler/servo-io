@@ -65,6 +65,8 @@ pub struct SecretManager {
     valid_secrets: Arc<RwLock<Vec<SecretVersion>>>,
     /// Last refresh time
     last_refresh: Arc<RwLock<Instant>>,
+    /// Circuit breaker for Secret Manager API
+    circuit_breaker: servo_storage::circuit_breaker::DatabaseCircuitBreaker,
 }
 
 impl SecretManager {
@@ -85,6 +87,14 @@ impl SecretManager {
             .build()
             .map_err(|e| Error::Internal(format!("Failed to create HTTP client: {}", e)))?;
 
+        // Initialize circuit breaker for Secret Manager API
+        let circuit_breaker_config =
+            servo_storage::circuit_breaker::CircuitBreakerConfig::from_env("secret_manager");
+        let circuit_breaker = servo_storage::circuit_breaker::DatabaseCircuitBreaker::new(
+            "secret_manager".to_string(),
+            circuit_breaker_config,
+        );
+
         Ok(Self {
             project_id,
             secret_name,
@@ -92,6 +102,7 @@ impl SecretManager {
             http_client,
             valid_secrets: Arc::new(RwLock::new(Vec::new())),
             last_refresh: Arc::new(RwLock::new(Instant::now() - REFRESH_INTERVAL)), // Force initial fetch
+            circuit_breaker,
         })
     }
 
@@ -187,14 +198,48 @@ impl SecretManager {
             .get_access_token("https://www.googleapis.com/auth/cloud-platform")
             .await?;
 
-        // Call Secret Manager API
-        let response = self
-            .http_client
-            .get(&api_url)
-            .header("Authorization", format!("Bearer {}", access_token))
-            .send()
-            .await
-            .map_err(|e| Error::Internal(format!("Secret Manager API call failed: {}", e)))?;
+        // Wrap HTTP call with circuit breaker
+        let http_client = &self.http_client;
+        let api_url_clone = api_url.to_string();
+        let access_token_clone = access_token.to_string();
+
+        let response_result = self
+            .circuit_breaker
+            .call(|| async move {
+                http_client
+                    .get(&api_url_clone)
+                    .header("Authorization", format!("Bearer {}", access_token_clone))
+                    .send()
+                    .await
+            })
+            .await;
+
+        // Handle circuit breaker result
+        let response = match response_result {
+            Ok(resp) => resp,
+            Err(servo_storage::circuit_breaker::CircuitBreakerError::CircuitOpen) => {
+                tracing::warn!("Circuit breaker is open for Secret Manager API");
+                return Err(Error::Internal(
+                    "Secret Manager API circuit breaker is open".to_string(),
+                ));
+            }
+            Err(servo_storage::circuit_breaker::CircuitBreakerError::Failure(e)) => {
+                // Classify error to determine if we should trip breaker
+                let status = crate::circuit_breaker::extract_status(&e);
+                let is_network = crate::circuit_breaker::is_network_error(&e);
+                let should_trip = crate::circuit_breaker::should_trip_breaker(status, is_network);
+
+                tracing::warn!(
+                    status = ?status,
+                    is_network = is_network,
+                    should_trip_breaker = should_trip,
+                    error = %e,
+                    "Secret Manager API HTTP request failed"
+                );
+
+                return Err(Error::Internal(format!("Secret Manager API call failed: {}", e)));
+            }
+        };
 
         if !response.status().is_success() {
             let status = response.status();
