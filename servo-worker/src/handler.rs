@@ -19,6 +19,7 @@ use base64::{engine::general_purpose::STANDARD, Engine as _};
 use servo_cloud_gcp::trace_context::{extract_trace_context, has_trace_context};
 use std::sync::Arc;
 use tracing::{error, info, warn, Instrument};
+use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 /// Application state shared across handlers
 #[derive(Clone)]
@@ -110,7 +111,7 @@ pub async fn execute_handler(
 
     // Extract trace context from Cloud Tasks headers for distributed tracing
     let has_trace = has_trace_context(&headers);
-    let _parent_context = extract_trace_context(&headers);
+    let parent_context = extract_trace_context(&headers);
 
     info!(
         execution_id = %execution_id,
@@ -133,6 +134,7 @@ pub async fn execute_handler(
     }
 
     // Create a span for the background execution that links to the parent trace
+    // Use OpenTelemetrySpanExt to set the parent context from the extracted trace headers
     let execution_span = tracing::info_span!(
         "worker.execute_workflow",
         otel.kind = "consumer",
@@ -141,6 +143,10 @@ pub async fn execute_handler(
         tenant_id = %tenant_id,
         asset_count = payload.execution_plan.len(),
     );
+
+    // Link the span to the parent trace context from Cloud Tasks headers
+    // This ensures end-to-end trace continuity: orchestrator → Cloud Tasks → worker
+    execution_span.set_parent(parent_context);
 
     // Spawn background task for execution
     // This allows us to return 200 OK immediately (Cloud Tasks requirement)

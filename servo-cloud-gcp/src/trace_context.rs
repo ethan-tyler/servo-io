@@ -77,7 +77,10 @@ pub fn inject_trace_context(headers: &mut HashMap<String, String>) {
 ///
 /// * `cx` - The OpenTelemetry context to inject from
 /// * `headers` - Mutable HashMap to inject trace headers into
-pub fn inject_trace_context_from(cx: &opentelemetry::Context, headers: &mut HashMap<String, String>) {
+pub fn inject_trace_context_from(
+    cx: &opentelemetry::Context,
+    headers: &mut HashMap<String, String>,
+) {
     let propagator = TraceContextPropagator::new();
     propagator.inject_context(cx, &mut HeaderInjector(headers));
 }
@@ -171,7 +174,9 @@ struct MapExtractor<'a>(&'a HashMap<String, String>);
 impl Extractor for MapExtractor<'_> {
     fn get(&self, key: &str) -> Option<&str> {
         // Try both lowercase and original case
-        self.0.get(key).map(|s| s.as_str())
+        self.0
+            .get(key)
+            .map(|s| s.as_str())
             .or_else(|| self.0.get(&key.to_lowercase()).map(|s| s.as_str()))
     }
 
@@ -203,7 +208,9 @@ mod tests {
 
         headers.insert(
             TRACEPARENT_HEADER,
-            "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01".parse().unwrap(),
+            "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
+                .parse()
+                .unwrap(),
         );
         assert!(has_trace_context(&headers));
     }

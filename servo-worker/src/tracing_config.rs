@@ -66,15 +66,15 @@ impl TracingConfig {
     /// - `SERVO_ENVIRONMENT`: Environment name (production/staging/development)
     /// - `GCP_PROJECT_ID`: GCP project for Cloud Trace
     pub fn from_environment() -> Self {
-        let environment = std::env::var("SERVO_ENVIRONMENT")
-            .unwrap_or_else(|_| "development".to_string());
+        let environment =
+            std::env::var("SERVO_ENVIRONMENT").unwrap_or_else(|_| "development".to_string());
 
         // Default sampling rates based on environment
         let default_sample_rate = match environment.as_str() {
-            "production" => 0.01,   // 1% in production
-            "staging" => 1.0,       // 100% in staging
-            "development" => 1.0,   // 100% in development
-            _ => 0.01,              // Conservative default
+            "production" => 0.01, // 1% in production
+            "staging" => 1.0,     // 100% in staging
+            "development" => 1.0, // 100% in development
+            _ => 0.01,            // Conservative default
         };
 
         // Default enabled state based on environment
@@ -110,7 +110,9 @@ impl TracingConfig {
 /// # Errors
 ///
 /// Returns an error if the OTLP exporter fails to initialize.
-pub fn init_tracing(config: &TracingConfig) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+pub fn init_tracing(
+    config: &TracingConfig,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let env_filter = EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| "servo_worker=info,tower_http=info".into());
 
@@ -129,9 +131,8 @@ pub fn init_tracing(config: &TracingConfig) -> Result<(), Box<dyn std::error::Er
 
         // Configure sampling strategy
         // ParentBased respects the sampling decision of the parent span
-        let sampler = Sampler::ParentBased(Box::new(
-            Sampler::TraceIdRatioBased(config.sample_rate)
-        ));
+        let sampler =
+            Sampler::ParentBased(Box::new(Sampler::TraceIdRatioBased(config.sample_rate)));
 
         // Configure OTLP exporter
         let endpoint = config.otlp_endpoint.clone().unwrap_or_else(|| {
@@ -216,7 +217,10 @@ mod tests {
         let config = TracingConfig::from_environment();
 
         // In development (default), tracing is disabled by default
-        assert!(!config.enabled, "Tracing should be disabled by default in development");
+        assert!(
+            !config.enabled,
+            "Tracing should be disabled by default in development"
+        );
         assert_eq!(config.sample_rate, 1.0, "100% sampling in development");
         assert_eq!(config.service_name, "servo-worker");
 
@@ -249,8 +253,14 @@ mod tests {
 
         let config = TracingConfig::from_environment();
 
-        assert!(config.enabled, "SERVO_TRACE_ENABLED=true should enable tracing");
-        assert_eq!(config.sample_rate, 0.5, "SERVO_TRACE_SAMPLE_RATE=0.5 should set rate");
+        assert!(
+            config.enabled,
+            "SERVO_TRACE_ENABLED=true should enable tracing"
+        );
+        assert_eq!(
+            config.sample_rate, 0.5,
+            "SERVO_TRACE_SAMPLE_RATE=0.5 should set rate"
+        );
 
         // Clean up
         clean_tracing_env();
