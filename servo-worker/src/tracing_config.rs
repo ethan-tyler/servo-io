@@ -33,6 +33,8 @@ use opentelemetry_semantic_conventions::resource::{SERVICE_NAME, SERVICE_VERSION
 use std::time::Duration;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
+use crate::sensitive_filter::SensitiveDataFilteringExporter;
+
 /// Configuration for distributed tracing.
 #[derive(Debug, Clone)]
 pub struct TracingConfig {
@@ -80,14 +82,24 @@ impl TracingConfig {
         // Default enabled state based on environment
         let default_enabled = environment != "development";
 
+        // Parse and clamp sample rate to valid range [0.0, 1.0]
+        let raw_sample_rate: f64 = std::env::var("SERVO_TRACE_SAMPLE_RATE")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(default_sample_rate);
+        let sample_rate = raw_sample_rate.clamp(0.0, 1.0);
+        if (raw_sample_rate - sample_rate).abs() > f64::EPSILON {
+            eprintln!(
+                "Warning: SERVO_TRACE_SAMPLE_RATE={} is out of range, clamped to {}",
+                raw_sample_rate, sample_rate
+            );
+        }
+
         Self {
             enabled: std::env::var("SERVO_TRACE_ENABLED")
                 .map(|v| v.to_lowercase() == "true" || v == "1")
                 .unwrap_or(default_enabled),
-            sample_rate: std::env::var("SERVO_TRACE_SAMPLE_RATE")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(default_sample_rate),
+            sample_rate,
             service_name: std::env::var("SERVO_SERVICE_NAME")
                 .unwrap_or_else(|_| "servo-worker".to_string()),
             service_version: std::env::var("SERVO_SERVICE_VERSION")
@@ -140,10 +152,14 @@ pub fn init_tracing(
             "https://cloudtrace.googleapis.com".to_string()
         });
 
-        let exporter = opentelemetry_otlp::new_exporter()
+        let base_exporter = opentelemetry_otlp::new_exporter()
             .tonic()
             .with_endpoint(&endpoint)
-            .with_timeout(Duration::from_secs(10));
+            .with_timeout(Duration::from_secs(10))
+            .build_span_exporter()?;
+
+        // Wrap exporter with sensitive data filter to redact PII/secrets
+        let filtered_exporter = SensitiveDataFilteringExporter::new(base_exporter);
 
         // Build trace config with sampler and resource
         let trace_config = Config::default()
@@ -151,9 +167,9 @@ pub fn init_tracing(
             .with_id_generator(RandomIdGenerator::default())
             .with_resource(resource);
 
-        // Build tracer provider
+        // Build tracer provider with filtered exporter
         let provider = TracerProvider::builder()
-            .with_batch_exporter(exporter.build_span_exporter()?, runtime::Tokio)
+            .with_batch_exporter(filtered_exporter, runtime::Tokio)
             .with_config(trace_config)
             .build();
 
@@ -275,6 +291,57 @@ mod tests {
         let config = TracingConfig::from_environment();
 
         assert_eq!(config.sample_rate, 1.0, "100% sampling in staging");
+
+        // Clean up
+        clean_tracing_env();
+    }
+
+    #[test]
+    fn test_sample_rate_clamping_high() {
+        // Clean environment for isolated test
+        clean_tracing_env();
+
+        // Test value > 1.0 gets clamped to 1.0
+        std::env::set_var("SERVO_TRACE_SAMPLE_RATE", "2.5");
+        let config = TracingConfig::from_environment();
+        assert_eq!(
+            config.sample_rate, 1.0,
+            "Sample rate > 1.0 should be clamped to 1.0"
+        );
+
+        // Clean up
+        clean_tracing_env();
+    }
+
+    #[test]
+    fn test_sample_rate_clamping_negative() {
+        // Clean environment for isolated test
+        clean_tracing_env();
+
+        // Test negative value gets clamped to 0.0
+        std::env::set_var("SERVO_TRACE_SAMPLE_RATE", "-0.5");
+        let config = TracingConfig::from_environment();
+        assert_eq!(
+            config.sample_rate, 0.0,
+            "Negative sample rate should be clamped to 0.0"
+        );
+
+        // Clean up
+        clean_tracing_env();
+    }
+
+    #[test]
+    fn test_sample_rate_valid_unchanged() {
+        // Clean environment for isolated test
+        clean_tracing_env();
+
+        // Test valid value in range is unchanged
+        std::env::set_var("SERVO_TRACE_SAMPLE_RATE", "0.75");
+        let config = TracingConfig::from_environment();
+        assert_eq!(
+            config.sample_rate, 0.75,
+            "Valid sample rate should be unchanged"
+        );
 
         // Clean up
         clean_tracing_env();

@@ -9,5 +9,6 @@ pub mod handler;
 pub mod oidc;
 pub mod rate_limiter;
 pub mod security;
+pub mod sensitive_filter;
 pub mod tracing_config;
 pub mod types;
