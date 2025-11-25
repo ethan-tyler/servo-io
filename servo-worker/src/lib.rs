@@ -6,6 +6,7 @@
 pub mod config;
 pub mod executor;
 pub mod handler;
+pub mod metrics;
 pub mod oidc;
 pub mod rate_limiter;
 pub mod security;

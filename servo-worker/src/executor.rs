@@ -5,6 +5,7 @@
 //! - Enforces execution timeout using tokio::select!
 //! - Handles errors and records failure details
 
+use crate::metrics::{record_execution, Timer};
 use crate::types::TaskPayload;
 use servo_runtime::state_machine::ExecutionState;
 use servo_runtime::ExecutionOrchestrator;
@@ -81,11 +82,15 @@ impl WorkflowExecutor {
     )]
     pub async fn execute(&self, payload: TaskPayload) -> Result<(), ExecutionError> {
         let tenant_id = TenantId::new(&payload.tenant_id);
+        let tenant_id_str = payload.tenant_id.clone();
+        let asset_count = payload.execution_plan.len();
+        let timer = Timer::start();
+
         let orchestrator =
             ExecutionOrchestrator::new(self.storage.clone(), servo_runtime::RetryPolicy::default());
 
         info!(
-            asset_count = payload.execution_plan.len(),
+            asset_count = asset_count,
             timeout_seconds = self.timeout.as_secs(),
             "Starting workflow execution"
         );
@@ -116,9 +121,16 @@ impl WorkflowExecutor {
         };
 
         // Handle result and transition to final state
+        let duration_secs = timer.elapsed_secs();
+
         match result {
             Ok(()) => {
-                info!("Workflow execution succeeded");
+                info!(
+                    duration_secs = duration_secs,
+                    "Workflow execution succeeded"
+                );
+                record_execution("succeeded", &tenant_id_str, duration_secs, asset_count);
+
                 orchestrator
                     .transition_state(
                         payload.execution_id,
@@ -132,7 +144,9 @@ impl WorkflowExecutor {
                     })?;
             }
             Err(ExecutionError::Timeout(duration)) => {
-                error!(timeout = ?duration, "Execution timed out");
+                error!(timeout = ?duration, duration_secs = duration_secs, "Execution timed out");
+                record_execution("timeout", &tenant_id_str, duration_secs, asset_count);
+
                 orchestrator
                     .transition_state(
                         payload.execution_id,
@@ -157,7 +171,9 @@ impl WorkflowExecutor {
                     })?;
             }
             Err(e) => {
-                error!(error = %e, "Workflow execution failed");
+                error!(error = %e, duration_secs = duration_secs, "Workflow execution failed");
+                record_execution("failed", &tenant_id_str, duration_secs, asset_count);
+
                 orchestrator
                     .record_failure(payload.execution_id, &e.to_string(), &tenant_id)
                     .await
