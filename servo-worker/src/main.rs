@@ -29,7 +29,7 @@ use servo_storage::PostgresStorage;
 use servo_worker::{
     config, executor,
     handler::{execute_handler, health_handler, metrics_handler, ready_handler, AppState},
-    oidc,
+    metrics, oidc,
     tracing_config::{self, TracingConfig},
 };
 use std::sync::Arc;
@@ -46,6 +46,9 @@ async fn main() {
         eprintln!("Failed to initialize tracing: {}", e);
         std::process::exit(1);
     }
+
+    // Initialize Prometheus metrics registry
+    metrics::init_metrics();
 
     info!(
         trace_enabled = tracing_config.enabled,

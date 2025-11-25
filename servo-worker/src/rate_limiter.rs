@@ -148,6 +148,10 @@ impl TenantRateLimiter {
                 GovernorRateLimiter::direct(quota)
             });
 
+        // Update active limiters gauge (skip in tests to avoid global registry issues)
+        #[cfg(not(test))]
+        crate::metrics::set_active_tenant_limiters(self.limiters.len());
+
         // Check rate limit
         match limiter.check() {
             Ok(_) => Ok(()),
@@ -157,6 +161,8 @@ impl TenantRateLimiter {
                     limit = self.config.requests_per_second,
                     "Tenant rate limit exceeded"
                 );
+                #[cfg(not(test))]
+                crate::metrics::record_rate_limit_rejection("tenant", tenant_id);
                 Err(RateLimitError::TenantLimitExceeded {
                     tenant_id: tenant_id.to_string(),
                     limit_per_second: self.config.requests_per_second,
@@ -222,6 +228,8 @@ impl IpRateLimiter {
                     limit = self.config.requests_per_minute,
                     "IP rate limit exceeded"
                 );
+                #[cfg(not(test))]
+                crate::metrics::record_rate_limit_rejection("ip", "N/A");
                 Err(RateLimitError::IpLimitExceeded {
                     ip,
                     limit_per_minute: self.config.requests_per_minute,
