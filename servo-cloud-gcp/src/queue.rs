@@ -3,11 +3,13 @@
 use crate::auth::GcpAuth;
 use crate::metrics::{ENQUEUE_DURATION, ENQUEUE_RETRIES, ENQUEUE_TOTAL, ENQUEUE_TOTAL_BY_TENANT};
 use crate::signing::sign_payload;
+use crate::trace_context::inject_trace_context;
 use crate::{Error, Result};
 use async_trait::async_trait;
 use serde::Serialize;
 use servo_runtime::task_enqueuer::{EnqueueError, EnqueueResult, TaskEnqueuer};
 use servo_storage::TenantId;
+use std::collections::HashMap;
 use uuid::Uuid;
 
 /// Check if tenant-level metrics should be included
@@ -223,17 +225,28 @@ impl CloudTasksQueue {
             self.queue_path()
         );
 
-        // Task definition
+        // Build headers with trace context for distributed tracing
         use base64::Engine as _;
+        let mut headers: HashMap<String, String> = HashMap::new();
+        headers.insert("Content-Type".to_string(), "application/json".to_string());
+        headers.insert("X-Servo-Signature".to_string(), hmac_signature.to_string());
+
+        // Inject W3C trace context (traceparent, tracestate) for distributed tracing
+        // This allows the worker to continue the same trace
+        inject_trace_context(&mut headers);
+
+        tracing::debug!(
+            headers = ?headers.keys().collect::<Vec<_>>(),
+            "Injecting trace context into Cloud Tasks headers"
+        );
+
+        // Task definition
         let task = serde_json::json!({
             "task": {
                 "httpRequest": {
                     "url": target_url,
                     "httpMethod": "POST",
-                    "headers": {
-                        "Content-Type": "application/json",
-                        "X-Servo-Signature": hmac_signature,
-                    },
+                    "headers": headers,
                     "body": base64::engine::general_purpose::STANDARD.encode(payload),
                     "oidcToken": {
                         "serviceAccountEmail": self.auth.service_account_email(),

@@ -28,6 +28,13 @@ thiserror = { workspace = true }
 # Logging/tracing
 tracing = { workspace = true }
 
+# OpenTelemetry (for trace context propagation)
+opentelemetry = { workspace = true }
+opentelemetry_sdk = { workspace = true }
+
+# HTTP types
+http = "1.1"
+
 # Cryptography (HMAC signing, JWT)
 hmac = "0.12"
 sha2 = "0.10"

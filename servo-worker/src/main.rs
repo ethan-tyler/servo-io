@@ -30,26 +30,28 @@ use servo_worker::{
     config, executor,
     handler::{execute_handler, health_handler, metrics_handler, ready_handler, AppState},
     oidc,
+    tracing_config::{self, TracingConfig},
 };
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::signal;
 use tower_http::{limit::RequestBodyLimitLayer, timeout::TimeoutLayer, trace::TraceLayer};
 use tracing::{error, info};
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[tokio::main]
 async fn main() {
-    // Initialize tracing subscriber with JSON formatting for Cloud Logging
-    tracing_subscriber::registry()
-        .with(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "servo_worker=info,tower_http=info".into()),
-        )
-        .with(tracing_subscriber::fmt::layer().json())
-        .init();
+    // Initialize tracing with OpenTelemetry support
+    let tracing_config = TracingConfig::from_environment();
+    if let Err(e) = tracing_config::init_tracing(&tracing_config) {
+        eprintln!("Failed to initialize tracing: {}", e);
+        std::process::exit(1);
+    }
 
-    info!("Starting Servo Cloud Run Worker");
+    info!(
+        trace_enabled = tracing_config.enabled,
+        sample_rate = tracing_config.sample_rate,
+        "Starting Servo Cloud Run Worker"
+    );
 
     // Load configuration from environment
     let config = match load_config() {
@@ -156,6 +158,8 @@ async fn main() {
         std::process::exit(1);
     }
 
+    // Flush any pending traces before exit
+    tracing_config::shutdown_tracing();
     info!("Server shut down gracefully");
 }
 

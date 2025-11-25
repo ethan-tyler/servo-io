@@ -142,6 +142,54 @@ export SERVO_CB_POSTGRES_HALF_OPEN_TIMEOUT_SECS=30  # Default: 30
 
 See [servo-storage documentation](../servo-storage/README.md) for details on database circuit breaker behavior.
 
+### Distributed Tracing (OpenTelemetry)
+
+The worker supports distributed tracing using OpenTelemetry with W3C Trace Context propagation. Traces flow from the orchestrator through Cloud Tasks to the worker, enabling end-to-end request visibility.
+
+**Configuration**:
+
+```bash
+# Enable distributed tracing
+export SERVO_TRACE_ENABLED=true
+
+# Sampling rate (0.0 to 1.0)
+export SERVO_TRACE_SAMPLE_RATE=0.01  # 1% in production, 100% in staging
+
+# OTLP endpoint (defaults to Cloud Trace)
+export SERVO_OTLP_ENDPOINT="https://cloudtrace.googleapis.com"
+
+# Environment (affects default sampling)
+export SERVO_ENVIRONMENT=production  # production|staging|development
+```
+
+**Default Sampling Rates by Environment**:
+- `production`: 1% (0.01) - enabled by default
+- `staging`: 100% (1.0) - enabled by default
+- `development`: 100% (1.0) - disabled by default
+
+**Trace Context Propagation**:
+
+Traces are propagated using W3C Trace Context standard:
+1. Orchestrator injects `traceparent`/`tracestate` headers when enqueueing to Cloud Tasks
+2. Cloud Tasks forwards headers to the worker
+3. Worker extracts trace context and creates child spans
+
+**Viewing Traces in Cloud Trace**:
+
+1. Enable the Cloud Trace API in your GCP project
+2. Set `SERVO_TRACE_ENABLED=true`
+3. View traces in GCP Console → Trace → Trace list
+4. Filter by service name: `servo-worker`
+
+**Span Hierarchy**:
+```
+orchestrator.start_execution
+  └── cloud_tasks.enqueue
+       └── worker.execute_workflow
+            └── worker.execute_asset (per asset)
+            └── db.query (database operations)
+```
+
 ## Endpoints
 
 ### `POST /execute`
