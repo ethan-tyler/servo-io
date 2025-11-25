@@ -49,6 +49,16 @@ clap = { version = "4.4", features = ["derive", "env"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 
+# OpenTelemetry (distributed tracing)
+opentelemetry = { version = "0.24", default-features = false, features = ["trace"] }
+opentelemetry_sdk = { version = "0.24", features = ["rt-tokio"] }
+opentelemetry-otlp = { version = "0.17", features = ["grpc-tonic", "trace"] }
+opentelemetry-semantic-conventions = "0.16"
+tracing-opentelemetry = "0.25"
+
+# gRPC (for OTLP export to Cloud Trace)
+tonic = { version = "0.12", features = ["tls", "tls-roots"] }
+
 # Date/time
 chrono = { version = "0.4", features = ["serde"] }
 

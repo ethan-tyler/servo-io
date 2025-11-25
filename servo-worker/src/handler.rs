@@ -16,8 +16,10 @@ use axum::{
     Json,
 };
 use base64::{engine::general_purpose::STANDARD, Engine as _};
+use servo_cloud_gcp::trace_context::{extract_trace_context, has_trace_context};
 use std::sync::Arc;
-use tracing::{error, info, warn};
+use tracing::{error, info, warn, Instrument};
+use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 /// Application state shared across handlers
 #[derive(Clone)]
@@ -107,11 +109,16 @@ pub async fn execute_handler(
     let execution_id = payload.execution_id;
     let tenant_id = &payload.tenant_id;
 
+    // Extract trace context from Cloud Tasks headers for distributed tracing
+    let has_trace = has_trace_context(&headers);
+    let parent_context = extract_trace_context(&headers);
+
     info!(
         execution_id = %execution_id,
         workflow_id = %payload.workflow_id,
         tenant_id = %tenant_id,
         asset_count = payload.execution_plan.len(),
+        has_trace_context = has_trace,
         "Received execution request"
     );
 
@@ -126,26 +133,45 @@ pub async fn execute_handler(
         return Err(ExecuteError::RateLimitExceeded(rate_limit_error));
     }
 
+    // Create a span for the background execution that links to the parent trace
+    // Use OpenTelemetrySpanExt to set the parent context from the extracted trace headers
+    let execution_span = tracing::info_span!(
+        "worker.execute_workflow",
+        otel.kind = "consumer",
+        execution_id = %execution_id,
+        workflow_id = %payload.workflow_id,
+        tenant_id = %tenant_id,
+        asset_count = payload.execution_plan.len(),
+    );
+
+    // Link the span to the parent trace context from Cloud Tasks headers
+    // This ensures end-to-end trace continuity: orchestrator → Cloud Tasks → worker
+    execution_span.set_parent(parent_context);
+
     // Spawn background task for execution
     // This allows us to return 200 OK immediately (Cloud Tasks requirement)
+    // The task is instrumented with the span to maintain trace context
     let executor = state.executor.clone();
-    tokio::spawn(async move {
-        match executor.execute(payload).await {
-            Ok(()) => {
-                info!(
-                    execution_id = %execution_id,
-                    "Workflow execution completed successfully"
-                );
-            }
-            Err(e) => {
-                error!(
-                    execution_id = %execution_id,
-                    error = %e,
-                    "Workflow execution failed"
-                );
+    tokio::spawn(
+        async move {
+            match executor.execute(payload).await {
+                Ok(()) => {
+                    info!(
+                        execution_id = %execution_id,
+                        "Workflow execution completed successfully"
+                    );
+                }
+                Err(e) => {
+                    error!(
+                        execution_id = %execution_id,
+                        error = %e,
+                        "Workflow execution failed"
+                    );
+                }
             }
         }
-    });
+        .instrument(execution_span),
+    );
 
     // Return immediate response
     Ok(Json(ExecuteResponse::accepted(execution_id)))

@@ -13,6 +13,7 @@ pub mod monitoring;
 pub mod queue;
 pub mod secrets;
 pub mod signing;
+pub mod trace_context;
 
 // Re-export commonly used types
 pub use config::GcpConfig;
