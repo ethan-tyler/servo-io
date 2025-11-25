@@ -172,6 +172,16 @@ impl RetryPolicy {
     /// }).await;
     /// # }
     /// ```
+    #[tracing::instrument(
+        name = "retry.execute",
+        skip(self, f),
+        fields(
+            max_attempts = %self.max_attempts,
+            strategy = ?self.strategy,
+            attempts = tracing::field::Empty,
+            total_duration_ms = tracing::field::Empty,
+        )
+    )]
     pub async fn execute_with_retry<F, Fut, T>(&self, mut f: F) -> crate::Result<T>
     where
         F: FnMut() -> Fut,
@@ -179,15 +189,22 @@ impl RetryPolicy {
     {
         let start = Instant::now();
         let mut attempt = 0;
+        let span = tracing::Span::current();
 
         loop {
             match f().await {
-                Ok(result) => return Ok(result),
+                Ok(result) => {
+                    span.record("attempts", attempt + 1);
+                    span.record("total_duration_ms", start.elapsed().as_millis() as u64);
+                    return Ok(result);
+                }
                 Err(e) => {
                     attempt += 1;
 
                     // Check if error is retryable - bail out early on permanent errors
                     if !Self::is_retryable(&e) {
+                        span.record("attempts", attempt);
+                        span.record("total_duration_ms", start.elapsed().as_millis() as u64);
                         tracing::debug!(
                             error = %e,
                             "Non-retryable error, failing immediately"
@@ -198,6 +215,8 @@ impl RetryPolicy {
                     // Check if we should give up
                     // attempt is now 1-indexed (1 = first attempt, 2 = second attempt, etc.)
                     if attempt >= self.max_attempts {
+                        span.record("attempts", attempt);
+                        span.record("total_duration_ms", start.elapsed().as_millis() as u64);
                         tracing::debug!(
                             attempt,
                             max_attempts = self.max_attempts,
@@ -207,6 +226,8 @@ impl RetryPolicy {
                     }
 
                     if self.is_elapsed_exceeded(start) {
+                        span.record("attempts", attempt);
+                        span.record("total_duration_ms", start.elapsed().as_millis() as u64);
                         tracing::debug!(
                             elapsed_ms = start.elapsed().as_millis(),
                             max_elapsed_ms = self.max_elapsed.as_millis(),
