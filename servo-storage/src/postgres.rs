@@ -223,7 +223,16 @@ impl PostgresStorage {
     /// Create a new asset
     ///
     /// This operation enforces tenant isolation via RLS policies.
-    #[instrument(skip(self, asset, tenant_id), fields(tenant = %tenant_id.as_str(), asset_id = %asset.id))]
+    #[instrument(
+        skip(self, asset, tenant_id),
+        fields(
+            db.system = "postgresql",
+            db.operation = "INSERT",
+            db.sql.table = "assets",
+            tenant_id = %tenant_id.as_str(),
+            asset_id = %asset.id
+        )
+    )]
     pub async fn create_asset(&self, asset: &AssetModel, tenant_id: &TenantId) -> Result<()> {
         // Validate input
         Self::validate_non_empty_string(&asset.name, "Asset name")?;
@@ -263,7 +272,16 @@ impl PostgresStorage {
     /// Get an asset by ID
     ///
     /// This operation enforces tenant isolation via RLS policies.
-    #[instrument(skip(self, tenant_id), fields(tenant = %tenant_id.as_str(), asset_id = %id))]
+    #[instrument(
+        skip(self, tenant_id),
+        fields(
+            db.system = "postgresql",
+            db.operation = "SELECT",
+            db.sql.table = "assets",
+            tenant_id = %tenant_id.as_str(),
+            asset_id = %id
+        )
+    )]
     pub async fn get_asset(&self, id: Uuid, tenant_id: &TenantId) -> Result<AssetModel> {
         self.with_tenant_context(tenant_id, |tx| {
             Box::pin(async move {
@@ -297,7 +315,16 @@ impl PostgresStorage {
     /// Create a new workflow
     ///
     /// This operation enforces tenant isolation via RLS policies.
-    #[instrument(skip(self, workflow, tenant_id), fields(tenant = %tenant_id.as_str(), workflow_id = %workflow.id))]
+    #[instrument(
+        skip(self, workflow, tenant_id),
+        fields(
+            db.system = "postgresql",
+            db.operation = "INSERT",
+            db.sql.table = "workflows",
+            tenant_id = %tenant_id.as_str(),
+            workflow_id = %workflow.id
+        )
+    )]
     pub async fn create_workflow(
         &self,
         workflow: &WorkflowModel,
@@ -339,7 +366,16 @@ impl PostgresStorage {
     /// Create a new execution
     ///
     /// This operation enforces tenant isolation via RLS policies.
-    #[instrument(skip(self, execution, tenant_id), fields(tenant = %tenant_id.as_str(), execution_id = %execution.id))]
+    #[instrument(
+        skip(self, execution, tenant_id),
+        fields(
+            db.system = "postgresql",
+            db.operation = "INSERT",
+            db.sql.table = "executions",
+            tenant_id = %tenant_id.as_str(),
+            execution_id = %execution.id
+        )
+    )]
     pub async fn create_execution(
         &self,
         execution: &ExecutionModel,
@@ -396,7 +432,17 @@ impl PostgresStorage {
     ///
     /// * `execution` - The execution model to create
     /// * `tenant_id` - Tenant identifier for RLS enforcement
-    #[instrument(skip(self, execution, tenant_id), fields(tenant = %tenant_id.as_str(), execution_id = %execution.id))]
+    #[instrument(
+        skip(self, execution, tenant_id),
+        fields(
+            db.system = "postgresql",
+            db.operation = "INSERT",
+            db.sql.table = "executions",
+            tenant_id = %tenant_id.as_str(),
+            execution_id = %execution.id,
+            was_created = tracing::field::Empty
+        )
+    )]
     pub async fn create_execution_or_get_existing(
         &self,
         execution: &ExecutionModel,
@@ -521,7 +567,16 @@ impl PostgresStorage {
     /// Update an existing workflow
     ///
     /// This operation enforces tenant isolation via RLS policies.
-    #[instrument(skip(self, workflow, tenant_id), fields(tenant = %tenant_id.as_str(), workflow_id = %workflow.id))]
+    #[instrument(
+        skip(self, workflow, tenant_id),
+        fields(
+            db.system = "postgresql",
+            db.operation = "UPDATE",
+            db.sql.table = "workflows",
+            tenant_id = %tenant_id.as_str(),
+            workflow_id = %workflow.id
+        )
+    )]
     pub async fn update_workflow(
         &self,
         workflow: &WorkflowModel,
@@ -569,7 +624,17 @@ impl PostgresStorage {
     /// Update an existing execution
     ///
     /// This operation enforces tenant isolation via RLS policies.
-    #[instrument(skip(self, execution, tenant_id), fields(tenant = %tenant_id.as_str(), execution_id = %execution.id))]
+    #[instrument(
+        skip(self, execution, tenant_id),
+        fields(
+            db.system = "postgresql",
+            db.operation = "UPDATE",
+            db.sql.table = "executions",
+            tenant_id = %tenant_id.as_str(),
+            execution_id = %execution.id,
+            execution_state = %execution.state
+        )
+    )]
     pub async fn update_execution(
         &self,
         execution: &ExecutionModel,
@@ -1193,7 +1258,18 @@ impl PostgresStorage {
     }
 
     /// Get the full lineage graph for an asset (recursively traverses all dependencies)
-    #[instrument(skip(self, tenant_id), fields(tenant = %tenant_id.as_str(), asset_id = %asset_id, max_depth))]
+    #[instrument(
+        skip(self, tenant_id),
+        fields(
+            db.system = "postgresql",
+            db.operation = "SELECT",
+            db.sql.table = "asset_dependencies",
+            tenant_id = %tenant_id.as_str(),
+            asset_id = %asset_id,
+            max_depth = %max_depth,
+            assets_visited = tracing::field::Empty
+        )
+    )]
     pub async fn get_asset_lineage(
         &self,
         asset_id: Uuid,

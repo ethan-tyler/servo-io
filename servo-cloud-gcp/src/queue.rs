@@ -118,6 +118,16 @@ impl CloudTasksQueue {
     /// - OIDC token generation fails
     /// - Payload signing fails
     /// - Cloud Tasks API request fails (4xx/5xx)
+    #[tracing::instrument(
+        name = "cloud_tasks.enqueue",
+        skip(self, idempotency_key, execution_plan),
+        fields(
+            execution_id = %execution_id,
+            workflow_id = %workflow_id,
+            tenant_id = %tenant_id,
+            task_name = tracing::field::Empty,
+        )
+    )]
     pub async fn enqueue(
         &self,
         execution_id: Uuid,
@@ -164,6 +174,9 @@ impl CloudTasksQueue {
         // Record success or failure metrics
         match &result {
             Ok(task_id) => {
+                // Record task_name in the span for tracing
+                tracing::Span::current().record("task_name", task_id.as_str());
+
                 // Always record aggregate metrics
                 ENQUEUE_TOTAL.with_label_values(&["success"]).inc();
 
@@ -213,6 +226,14 @@ impl CloudTasksQueue {
     ///
     /// Calls the Cloud Tasks API with retries and proper error handling.
     /// Cloud Tasks will automatically inject OIDC authentication using the service account.
+    #[tracing::instrument(
+        name = "cloud_tasks.create_task",
+        skip(self, hmac_signature, payload),
+        fields(
+            queue_path = %self.queue_path(),
+            target_url = %target_url,
+        )
+    )]
     async fn create_cloud_task(
         &self,
         target_url: &str,
@@ -270,6 +291,14 @@ impl CloudTasksQueue {
     }
 
     /// Call Cloud Tasks API with exponential backoff retries
+    #[tracing::instrument(
+        name = "cloud_tasks.api_call",
+        skip(self, access_token, task),
+        fields(
+            attempts = tracing::field::Empty,
+            http.status_code = tracing::field::Empty,
+        )
+    )]
     async fn call_cloud_tasks_api(
         &self,
         api_url: &str,
@@ -340,6 +369,11 @@ impl CloudTasksQueue {
 
             // Success
             if status.is_success() {
+                // Record span fields
+                let span = tracing::Span::current();
+                span.record("attempts", attempt);
+                span.record("http.status_code", status.as_u16());
+
                 let task_response: serde_json::Value = response
                     .json()
                     .await
