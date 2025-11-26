@@ -1,0 +1,62 @@
+[package]
+name = "servo-tests"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+description = "Shared test utilities for Servo crates"
+
+[dependencies]
+# Internal dependencies
+servo-core = { path = "../servo-core" }
+servo-storage = { path = "../servo-storage" }
+servo-runtime = { path = "../servo-runtime" }
+
+# Database (for models and types)
+sqlx = { workspace = true }
+
+# Async runtime
+tokio = { workspace = true }
+async-trait = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# UUID
+uuid = { workspace = true }
+
+# Date/time
+chrono = { workspace = true }
+
+# Error handling
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+
+# HTTP testing
+axum = { version = "0.7", features = ["macros"] }
+http = "1.0"
+http-body-util = "0.1"
+
+# Mocking
+wiremock = "0.5"
+jsonwebtoken = "9.2"
+
+# HMAC signing for test payloads
+hmac = "0.12"
+sha2 = "0.10"
+hex = "0.4"
+base64 = "0.22"
+
+# Random data generation
+rand = "0.8"
+
+# Pattern matching
+regex = { workspace = true }
+
+# Testcontainers
+testcontainers = { workspace = true }
+testcontainers-modules = { workspace = true }
