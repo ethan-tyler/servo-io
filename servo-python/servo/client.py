@@ -74,7 +74,7 @@ class ServoClient:
     def _handle_response(self, response: httpx.Response) -> dict[str, Any]:
         """Handle API response and raise appropriate errors."""
         try:
-            data = response.json()
+            data: dict[str, Any] = response.json()
         except Exception:
             data = {"raw": response.text}
 
@@ -125,12 +125,14 @@ class ServoClient:
     def list_assets(self) -> list[dict[str, Any]]:
         """List all registered assets."""
         response = self._request("GET", "/api/v1/assets")
-        return response.get("assets", [])
+        assets: list[dict[str, Any]] = response.get("assets", [])
+        return assets
 
     def get_asset(self, name: str) -> dict[str, Any]:
         """Get asset details by name."""
         response = self._request("GET", f"/api/v1/assets/{name}")
-        return response.get("asset", {})
+        asset: dict[str, Any] = response.get("asset", {})
+        return asset
 
     def materialize(
         self,
@@ -240,12 +242,14 @@ class ServoClient:
     def list_workflows(self) -> list[dict[str, Any]]:
         """List all registered workflows."""
         response = self._request("GET", "/api/v1/workflows")
-        return response.get("workflows", [])
+        workflows: list[dict[str, Any]] = response.get("workflows", [])
+        return workflows
 
     def get_workflow(self, name: str) -> dict[str, Any]:
         """Get workflow details by name."""
         response = self._request("GET", f"/api/v1/workflows/{name}")
-        return response.get("workflow", {})
+        workflow: dict[str, Any] = response.get("workflow", {})
+        return workflow
 
     def trigger_workflow(
         self,
@@ -330,7 +334,8 @@ class ServoClient:
             params["status"] = status.value
 
         response = self._request("GET", "/api/v1/runs", params=params)
-        return response.get("runs", [])
+        runs: list[dict[str, Any]] = response.get("runs", [])
+        return runs
 
     def get_run(self, run_id: str) -> dict[str, Any]:
         """Get details of a specific run."""
@@ -393,7 +398,7 @@ class AsyncServoClient:
     async def _handle_response(self, response: httpx.Response) -> dict[str, Any]:
         """Handle API response and raise appropriate errors."""
         try:
-            data = response.json()
+            data: dict[str, Any] = response.json()
         except Exception:
             data = {"raw": response.text}
 

@@ -28,7 +28,7 @@ class ServoAPIError(ServoError):
         status_code: int | None = None,
         response_body: dict[str, Any] | None = None,
     ) -> None:
-        details = {}
+        details: dict[str, Any] = {}
         if status_code is not None:
             details["status_code"] = status_code
         if response_body is not None:

@@ -75,9 +75,11 @@ def validate_dependencies_strict() -> None:
 class Asset:
     """Wrapper class for asset functions."""
 
+    _func: Callable[..., Any]
+
     def __init__(
         self,
-        func: Callable[P, R],
+        func: Callable[..., Any],
         *,
         name: str | None = None,
         dependencies: list[str] | None = None,
@@ -103,7 +105,11 @@ class Asset:
             team=meta_dict.get("team"),
             tags=meta_dict.get("tags", []),
             description=meta_dict.get("description"),
-            custom={k: v for k, v in meta_dict.items() if k not in ("owner", "team", "tags", "description")},
+            custom={
+                k: v
+                for k, v in meta_dict.items()
+                if k not in ("owner", "team", "tags", "description")
+            },
         )
 
         # Preserve function metadata
@@ -186,7 +192,7 @@ class Asset:
         """Get the full asset definition."""
         return _asset_registry[self._name]
 
-    def __call__(self, *args: P.args, **kwargs: P.kwargs) -> R:
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
         """Execute the asset function."""
         try:
             return self._func(*args, **kwargs)
@@ -199,14 +205,16 @@ class Asset:
 
     def materialize(self, **kwargs: Any) -> AssetOutput:
         """Execute the asset and wrap result in AssetOutput."""
-        result = self(**kwargs)
+        result: Any = self(**kwargs)
 
         # If already AssetOutput, return as-is
         if isinstance(result, AssetOutput):
             return result
 
         # Try to detect DataFrame types and use from_dataframe
-        if hasattr(result, "shape") and (hasattr(result, "memory_usage") or hasattr(result, "estimated_size")):
+        if hasattr(result, "shape") and (
+            hasattr(result, "memory_usage") or hasattr(result, "estimated_size")
+        ):
             return AssetOutput.from_dataframe(result)
 
         # Wrap plain values
@@ -214,11 +222,12 @@ class Asset:
 
 
 @overload
-def asset(func: Callable[P, R]) -> Asset: ...
+def asset(func: Callable[..., Any]) -> Asset: ...
 
 
 @overload
 def asset(
+    func: None = None,
     *,
     name: str | None = None,
     dependencies: list[str] | None = None,
@@ -226,11 +235,11 @@ def asset(
     metadata: dict[str, Any] | None = None,
     group: str | None = None,
     is_source: bool = False,
-) -> Callable[[Callable[P, R]], Asset]: ...
+) -> Callable[[Callable[..., Any]], Asset]: ...
 
 
 def asset(
-    func: Callable[P, R] | None = None,
+    func: Callable[..., Any] | None = None,
     *,
     name: str | None = None,
     dependencies: list[str] | None = None,
@@ -238,7 +247,7 @@ def asset(
     metadata: dict[str, Any] | None = None,
     group: str | None = None,
     is_source: bool = False,
-) -> Asset | Callable[[Callable[P, R]], Asset]:
+) -> Asset | Callable[[Callable[..., Any]], Asset]:
     """
     Decorator to define a data asset.
 
@@ -269,7 +278,7 @@ def asset(
         return Asset(func)
 
     # Called with arguments: @asset(...)
-    def decorator(f: Callable[P, R]) -> Asset:
+    def decorator(f: Callable[..., Any]) -> Asset:
         return Asset(
             f,
             name=name,

@@ -5,7 +5,7 @@ from __future__ import annotations
 import functools
 import inspect
 import sys
-from typing import Callable, TypeVar, overload
+from typing import Any, Callable, TypeVar, overload
 
 if sys.version_info >= (3, 10):
     from typing import ParamSpec
@@ -41,9 +41,11 @@ def get_workflow(name: str) -> WorkflowDefinition | None:
 class Workflow:
     """Wrapper class for workflow functions."""
 
+    _func: Callable[..., Any]
+
     def __init__(
         self,
-        func: Callable[P, R],
+        func: Callable[..., Any],
         *,
         name: str | None = None,
         schedule: str | None = None,
@@ -122,10 +124,10 @@ class Workflow:
 
         # Define valid ranges for each field
         ranges = [
-            (0, 59, "minute"),      # minute
-            (0, 23, "hour"),        # hour
+            (0, 59, "minute"),  # minute
+            (0, 23, "hour"),  # hour
             (1, 31, "day-of-month"),  # day of month
-            (1, 12, "month"),       # month
+            (1, 12, "month"),  # month
             (0, 6, "day-of-week"),  # day of week (0=Sunday)
         ]
 
@@ -223,7 +225,7 @@ class Workflow:
         """Get the full workflow definition."""
         return _workflow_registry.get(self._name)
 
-    def __call__(self, *args: P.args, **kwargs: P.kwargs) -> list[str]:
+    def __call__(self, *args: Any, **kwargs: Any) -> list[str]:
         """Execute the workflow function to get asset list."""
         result = self._func(*args, **kwargs)
 
@@ -263,11 +265,12 @@ class Workflow:
 
 
 @overload
-def workflow(func: Callable[P, R]) -> Workflow: ...
+def workflow(func: Callable[..., Any]) -> Workflow: ...
 
 
 @overload
 def workflow(
+    func: None = None,
     *,
     name: str | None = None,
     schedule: str | None = None,
@@ -275,11 +278,11 @@ def workflow(
     executor: str | None = None,
     timeout_seconds: int = 3600,
     retries: int = 0,
-) -> Callable[[Callable[P, R]], Workflow]: ...
+) -> Callable[[Callable[..., Any]], Workflow]: ...
 
 
 def workflow(
-    func: Callable[P, R] | None = None,
+    func: Callable[..., Any] | None = None,
     *,
     name: str | None = None,
     schedule: str | None = None,
@@ -287,7 +290,7 @@ def workflow(
     executor: str | None = None,
     timeout_seconds: int = 3600,
     retries: int = 0,
-) -> Workflow | Callable[[Callable[P, R]], Workflow]:
+) -> Workflow | Callable[[Callable[..., Any]], Workflow]:
     """
     Decorator to define a workflow (pipeline of assets).
 
@@ -318,7 +321,7 @@ def workflow(
         return Workflow(func)
 
     # Called with arguments: @workflow(...)
-    def decorator(f: Callable[P, R]) -> Workflow:
+    def decorator(f: Callable[..., Any]) -> Workflow:
         return Workflow(
             f,
             name=name,
