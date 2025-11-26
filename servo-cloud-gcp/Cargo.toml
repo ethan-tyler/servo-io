@@ -46,6 +46,9 @@ base64 = "0.21"
 # UUID
 uuid = { workspace = true }
 
+# URL encoding (for metadata server identity token requests)
+urlencoding = "2.1"
+
 # Date/time
 chrono = { workspace = true }
 

@@ -54,9 +54,12 @@ htmlcov/
 *.tfstate.*
 .terraform.lock.hcl
 
-# Environment
+# Environment (local development secrets)
 .env
 .env.local
+.env.*.local
+.env.development
+.env.staging
 
 # Documentation
 /site/

@@ -6,6 +6,7 @@
 
 use crate::executor::WorkflowExecutor;
 use crate::rate_limiter::{self, RateLimitError};
+use crate::secrets_provider::SecretsProvider;
 use crate::security::{extract_signature, verify_signature};
 use crate::types::{ExecuteResponse, HealthResponse, TaskPayload};
 use axum::{
@@ -25,7 +26,7 @@ use tracing_opentelemetry::OpenTelemetrySpanExt;
 #[derive(Clone)]
 pub struct AppState {
     pub executor: Arc<WorkflowExecutor>,
-    pub hmac_secret: String,
+    pub secrets_provider: Arc<SecretsProvider>,
     pub oidc_validator: Arc<crate::oidc::OidcValidator>,
     pub tenant_rate_limiter: Arc<rate_limiter::TenantRateLimiter>,
     pub ip_rate_limiter: Arc<rate_limiter::IpRateLimiter>,
@@ -86,13 +87,33 @@ pub async fn execute_handler(
     let signature =
         extract_signature(signature_header).map_err(|_| ExecuteError::MissingSignature)?;
 
-    // Verify signature
-    verify_signature(&body, signature, &state.hmac_secret).map_err(|e| {
-        error!(error = %e, "Signature verification failed");
-        ExecuteError::InvalidSignature
-    })?;
+    // Verify signature with any valid secret (supports rotation)
+    let valid_secrets = state.secrets_provider.get_all_valid_secrets().await;
+    if valid_secrets.is_empty() {
+        error!("No valid secrets available for signature verification");
+        return Err(ExecuteError::InvalidSignature);
+    }
 
-    info!("Signature verified successfully");
+    let mut signature_valid = false;
+    for secret in &valid_secrets {
+        if verify_signature(&body, signature, secret).is_ok() {
+            signature_valid = true;
+            break;
+        }
+    }
+
+    if !signature_valid {
+        error!(
+            secrets_count = valid_secrets.len(),
+            "Signature verification failed with all available secrets"
+        );
+        return Err(ExecuteError::InvalidSignature);
+    }
+
+    info!(
+        secrets_count = valid_secrets.len(),
+        "Signature verified successfully"
+    );
 
     // Decode base64 payload
     let decoded = STANDARD.decode(&body).map_err(|e| {

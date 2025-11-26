@@ -27,9 +27,12 @@ use axum::{
 };
 use servo_storage::PostgresStorage;
 use servo_worker::{
-    config, executor,
+    config,
+    environment::RuntimeEnvironment,
+    executor,
     handler::{execute_handler, health_handler, metrics_handler, ready_handler, AppState},
     metrics, oidc,
+    secrets_provider::SecretsProvider,
     tracing_config::{self, TracingConfig},
 };
 use std::sync::Arc;
@@ -40,6 +43,13 @@ use tracing::{error, info};
 
 #[tokio::main]
 async fn main() {
+    // Load .env file if present (local development)
+    // This must be done before any env var reads
+    if let Err(e) = dotenvy::dotenv() {
+        // Not an error - .env is optional
+        eprintln!("Note: No .env file found ({})", e);
+    }
+
     // Initialize tracing with OpenTelemetry support
     let tracing_config = TracingConfig::from_environment();
     if let Err(e) = tracing_config::init_tracing(&tracing_config) {
@@ -50,14 +60,34 @@ async fn main() {
     // Initialize Prometheus metrics registry
     metrics::init_metrics();
 
+    // Detect runtime environment
+    let environment = RuntimeEnvironment::detect();
+
     info!(
         trace_enabled = tracing_config.enabled,
         sample_rate = tracing_config.sample_rate,
+        environment = %environment,
         "Starting Servo Cloud Run Worker"
     );
 
+    // Initialize secrets provider
+    let secrets_provider = match SecretsProvider::new(environment).await {
+        Ok(provider) => {
+            info!(
+                environment = %environment,
+                secret_source = provider.secret_source(),
+                "Secrets provider initialized"
+            );
+            Arc::new(provider)
+        }
+        Err(e) => {
+            error!(error = %e, environment = %environment, "Failed to initialize secrets provider");
+            std::process::exit(1);
+        }
+    };
+
     // Load configuration from environment
-    let config = match load_config() {
+    let config = match load_config().await {
         Ok(cfg) => cfg,
         Err(e) => {
             error!(error = %e, "Failed to load configuration");
@@ -121,7 +151,7 @@ async fn main() {
     // Create application state
     let state = AppState {
         executor,
-        hmac_secret: config.hmac_secret,
+        secrets_provider: secrets_provider.clone(),
         oidc_validator,
         tenant_rate_limiter,
         ip_rate_limiter,
@@ -169,18 +199,16 @@ async fn main() {
 /// Configuration loaded from environment variables
 struct Config {
     database_url: String,
-    hmac_secret: String,
     port: u16,
     execution_timeout: Duration,
 }
 
 /// Load configuration from environment variables
-fn load_config() -> Result<Config, String> {
+///
+/// Note: HMAC secret is now handled by SecretsProvider
+async fn load_config() -> Result<Config, String> {
     let database_url =
         std::env::var("DATABASE_URL").map_err(|_| "DATABASE_URL environment variable not set")?;
-
-    let hmac_secret = std::env::var("SERVO_HMAC_SECRET")
-        .map_err(|_| "SERVO_HMAC_SECRET environment variable not set")?;
 
     let port = std::env::var("PORT")
         .unwrap_or_else(|_| "8080".to_string())
@@ -194,7 +222,6 @@ fn load_config() -> Result<Config, String> {
 
     Ok(Config {
         database_url,
-        hmac_secret,
         port,
         execution_timeout: Duration::from_secs(timeout_seconds),
     })

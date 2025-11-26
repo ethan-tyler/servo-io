@@ -43,6 +43,9 @@ uuid = { workspace = true }
 anyhow = { workspace = true }
 thiserror = { workspace = true }
 
+# Environment file support (local development)
+dotenvy = "0.15"
+
 # Logging/tracing
 tracing = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
