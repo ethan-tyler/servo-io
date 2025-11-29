@@ -31,3 +31,8 @@ tracing = { workspace = true }
 servo-core = { path = "../servo-core" }
 
 [dev-dependencies]
+criterion = { workspace = true }
+
+[[bench]]
+name = "lineage_benchmarks"
+harness = false

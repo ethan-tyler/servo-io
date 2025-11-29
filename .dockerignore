@@ -48,5 +48,5 @@ temp/
 *.bak
 *.log
 
-# Claude
+# Local config
 .claude/

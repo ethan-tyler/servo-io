@@ -27,6 +27,24 @@ use wiremock::{
     Mock, MockServer, ResponseTemplate,
 };
 
+// Test secrets provider that returns a fixed secret
+mod test_secrets {
+    use servo_worker::environment::RuntimeEnvironment;
+    use servo_worker::secrets_provider::{SecretsError, SecretsProvider};
+
+    /// Create a test secrets provider with a fixed HMAC secret
+    pub async fn create_test_secrets_provider(
+        hmac_secret: &str,
+    ) -> Result<SecretsProvider, SecretsError> {
+        // Set the environment variable for testing
+        std::env::set_var("SERVO_HMAC_SECRET", hmac_secret);
+        // Force development mode which uses env vars
+        std::env::remove_var("K_SERVICE");
+
+        SecretsProvider::new(RuntimeEnvironment::Development).await
+    }
+}
+
 /// Test JWKS (JSON Web Key Set) with a public key
 /// This matches the private key used to sign test tokens
 fn test_jwks() -> serde_json::Value {
@@ -154,7 +172,7 @@ fn create_signed_payload(hmac_secret: &str) -> (Vec<u8>, String) {
 }
 
 /// Set up test environment with mock JWKS server
-async fn setup_test_env() -> (MockServer, AppState, String) {
+async fn setup_test_env() -> (MockServer, AppState, String, String) {
     // Start mock JWKS server
     let mock_server = MockServer::start().await;
 
@@ -195,7 +213,15 @@ async fn setup_test_env() -> (MockServer, AppState, String) {
     );
     let executor = Arc::new(WorkflowExecutor::new(storage, Duration::from_secs(60)));
 
-    let hmac_secret = "test-hmac-secret".to_string();
+    // Use a secret that meets minimum length requirement (32 bytes)
+    let hmac_secret = "test-hmac-secret-minimum-32-bytes-long".to_string();
+
+    // Create test secrets provider
+    let secrets_provider = Arc::new(
+        test_secrets::create_test_secrets_provider(&hmac_secret)
+            .await
+            .expect("Failed to create test secrets provider"),
+    );
 
     // Initialize rate limiters for tests
     let tenant_rate_limiter_config = servo_worker::rate_limiter::TenantRateLimiterConfig::default();
@@ -209,21 +235,21 @@ async fn setup_test_env() -> (MockServer, AppState, String) {
 
     let state = AppState {
         executor,
-        hmac_secret: hmac_secret.clone(),
+        secrets_provider,
         oidc_validator,
         tenant_rate_limiter,
         ip_rate_limiter,
     };
 
-    (mock_server, state, audience.to_string())
+    (mock_server, state, audience.to_string(), hmac_secret)
 }
 
 #[tokio::test]
 #[ignore] // Requires database connection
 async fn test_worker_requires_oidc_token() {
-    let (_mock_server, state, _audience) = setup_test_env().await;
+    let (_mock_server, state, _audience, hmac_secret) = setup_test_env().await;
 
-    let (body, signature) = create_signed_payload(&state.hmac_secret);
+    let (body, signature) = create_signed_payload(&hmac_secret);
 
     let request = Request::builder()
         .uri("/execute")
@@ -246,9 +272,9 @@ async fn test_worker_requires_oidc_token() {
 #[tokio::test]
 #[ignore] // Requires database connection
 async fn test_worker_validates_oidc_signature() {
-    let (_mock_server, state, _audience) = setup_test_env().await;
+    let (_mock_server, state, _audience, hmac_secret) = setup_test_env().await;
 
-    let (body, signature) = create_signed_payload(&state.hmac_secret);
+    let (body, signature) = create_signed_payload(&hmac_secret);
 
     // Use invalid token (not properly signed)
     let invalid_token = "invalid.token.here";
@@ -275,9 +301,9 @@ async fn test_worker_validates_oidc_signature() {
 #[tokio::test]
 #[ignore] // Requires database connection
 async fn test_worker_validates_oidc_audience() {
-    let (_mock_server, state, audience) = setup_test_env().await;
+    let (_mock_server, state, audience, hmac_secret) = setup_test_env().await;
 
-    let (body, signature) = create_signed_payload(&state.hmac_secret);
+    let (body, signature) = create_signed_payload(&hmac_secret);
 
     // Create token with wrong audience
     let wrong_aud_token = create_wrong_audience_token(&audience, "test@example.com");
@@ -304,9 +330,9 @@ async fn test_worker_validates_oidc_audience() {
 #[tokio::test]
 #[ignore] // Requires database connection
 async fn test_worker_rejects_expired_token() {
-    let (_mock_server, state, audience) = setup_test_env().await;
+    let (_mock_server, state, audience, hmac_secret) = setup_test_env().await;
 
-    let (body, signature) = create_signed_payload(&state.hmac_secret);
+    let (body, signature) = create_signed_payload(&hmac_secret);
 
     // Create expired token
     let expired_token = create_expired_token(&audience, "test@example.com");
@@ -333,9 +359,9 @@ async fn test_worker_rejects_expired_token() {
 #[tokio::test]
 #[ignore] // Requires database connection
 async fn test_worker_accepts_valid_oidc_token() {
-    let (_mock_server, state, audience) = setup_test_env().await;
+    let (_mock_server, state, audience, hmac_secret) = setup_test_env().await;
 
-    let (body, signature) = create_signed_payload(&state.hmac_secret);
+    let (body, signature) = create_signed_payload(&hmac_secret);
 
     // Create valid token
     let valid_token = create_valid_token(&audience, "test@example.com");
@@ -382,7 +408,15 @@ async fn test_oidc_validation_can_be_disabled() {
     );
     let executor = Arc::new(WorkflowExecutor::new(storage, Duration::from_secs(60)));
 
-    let hmac_secret = "test-hmac-secret".to_string();
+    // Use a secret that meets minimum length requirement (32 bytes)
+    let hmac_secret = "test-hmac-secret-minimum-32-bytes-long".to_string();
+
+    // Create test secrets provider
+    let secrets_provider = Arc::new(
+        test_secrets::create_test_secrets_provider(&hmac_secret)
+            .await
+            .expect("Failed to create test secrets provider"),
+    );
 
     // Initialize rate limiters for tests
     let tenant_rate_limiter_config = servo_worker::rate_limiter::TenantRateLimiterConfig::default();
@@ -396,13 +430,13 @@ async fn test_oidc_validation_can_be_disabled() {
 
     let state = AppState {
         executor,
-        hmac_secret: hmac_secret.clone(),
+        secrets_provider,
         oidc_validator,
         tenant_rate_limiter,
         ip_rate_limiter,
     };
 
-    let (body, signature) = create_signed_payload(&state.hmac_secret);
+    let (body, signature) = create_signed_payload(&hmac_secret);
 
     // Request WITHOUT OIDC token
     let request = Request::builder()

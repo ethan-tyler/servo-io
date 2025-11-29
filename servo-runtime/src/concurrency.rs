@@ -1,6 +1,7 @@
 //! Concurrency control for workflow executions
 
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::sync::Semaphore;
 
 /// Concurrency limiter for controlling parallel executions
@@ -19,11 +20,29 @@ impl ConcurrencyLimiter {
     }
 
     /// Acquire a permit for execution
+    #[tracing::instrument(
+        name = "concurrency.acquire",
+        skip(self),
+        fields(
+            max_concurrent = %self.max_concurrent,
+            available_before = tracing::field::Empty,
+            wait_duration_ms = tracing::field::Empty,
+        )
+    )]
     pub async fn acquire(&self) -> tokio::sync::SemaphorePermit<'_> {
-        self.semaphore
+        let span = tracing::Span::current();
+        let available_before = self.semaphore.available_permits();
+        span.record("available_before", available_before);
+
+        let start = Instant::now();
+        let permit = self
+            .semaphore
             .acquire()
             .await
-            .expect("Semaphore closed unexpectedly")
+            .expect("Semaphore closed unexpectedly");
+
+        span.record("wait_duration_ms", start.elapsed().as_millis() as u64);
+        permit
     }
 
     /// Get the maximum concurrent executions

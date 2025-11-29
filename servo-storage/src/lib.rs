@@ -12,8 +12,9 @@ pub mod tenant;
 
 // Re-export commonly used types
 pub use circuit_breaker::CircuitBreakerConfig;
-pub use models::{AssetModel, ExecutionModel, WorkflowModel};
+pub use models::{AssetCheckModel, AssetModel, CheckResultModel, ExecutionModel, WorkflowModel};
 pub use postgres::PostgresStorage;
+pub use sqlx::types::Json;
 pub use tenant::TenantId;
 
 /// Result type for storage operations

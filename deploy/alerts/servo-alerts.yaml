@@ -1,0 +1,287 @@
+# Servo Prometheus Alerting Rules
+#
+# This file defines alerting rules for monitoring Servo infrastructure.
+# Import into Prometheus with:
+#   rule_files:
+#     - /path/to/servo-alerts.yaml
+#
+# For GCP Cloud Monitoring, these rules can be converted to alerting policies.
+
+groups:
+  # ==========================================================================
+  # SLO Alerts - Error Rate and Latency
+  # ==========================================================================
+  - name: servo_slo
+    rules:
+      # Error Rate SLO: <0.1% error rate over 5 minutes
+      - alert: ServoHighErrorRate
+        expr: |
+          (
+            sum(rate(servo_workflow_executions_total{status="failed"}[5m]))
+            / sum(rate(servo_workflow_executions_total[5m]))
+          ) > 0.001
+        for: 5m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: "High workflow execution error rate"
+          description: "Error rate is {{ $value | printf \"%.2f\" }}% (threshold: 0.1%)"
+          runbook_url: "https://docs.servo.io/runbooks/high-error-rate"
+
+      # Latency SLO: P99 < 500ms for HTTP requests
+      - alert: ServoHighLatency
+        expr: |
+          histogram_quantile(0.99,
+            sum(rate(servo_http_request_duration_seconds_bucket{endpoint="execute"}[5m])) by (le)
+          ) > 0.5
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "High HTTP request latency (P99)"
+          description: "P99 latency is {{ $value | printf \"%.2f\" }}s (threshold: 0.5s)"
+          runbook_url: "https://docs.servo.io/runbooks/high-latency"
+
+      # Workflow Duration SLO: P99 < 5 minutes
+      - alert: ServoSlowWorkflows
+        expr: |
+          histogram_quantile(0.99,
+            sum(rate(servo_workflow_duration_seconds_bucket[15m])) by (le)
+          ) > 300
+        for: 10m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Workflows running slower than expected"
+          description: "P99 workflow duration is {{ $value | printf \"%.0f\" }}s (threshold: 300s)"
+          runbook_url: "https://docs.servo.io/runbooks/slow-workflows"
+
+  # ==========================================================================
+  # Data Quality Alerts
+  # ==========================================================================
+  - name: servo_data_quality
+    rules:
+      # High check failure rate
+      - alert: ServoDataQualityFailures
+        expr: |
+          (
+            sum(rate(servo_check_executions_total{outcome="failed"}[15m]))
+            / sum(rate(servo_check_executions_total[15m]))
+          ) > 0.1
+        for: 10m
+        labels:
+          severity: warning
+          team: data
+        annotations:
+          summary: "High data quality check failure rate"
+          description: "{{ $value | printf \"%.1f\" }}% of checks are failing (threshold: 10%)"
+          runbook_url: "https://docs.servo.io/runbooks/data-quality-failures"
+
+      # No checks running (possible misconfiguration)
+      - alert: ServoNoDataQualityChecks
+        expr: |
+          sum(rate(servo_check_executions_total[1h])) == 0
+        for: 1h
+        labels:
+          severity: info
+          team: data
+        annotations:
+          summary: "No data quality checks executed recently"
+          description: "No checks have run in the past hour. Verify check configuration."
+          runbook_url: "https://docs.servo.io/runbooks/no-checks-running"
+
+      # Check execution taking too long
+      - alert: ServoSlowCheckExecution
+        expr: |
+          histogram_quantile(0.99,
+            sum(rate(servo_check_duration_seconds_bucket[15m])) by (le)
+          ) > 10
+        for: 15m
+        labels:
+          severity: warning
+          team: data
+        annotations:
+          summary: "Data quality checks running slowly"
+          description: "P99 check duration is {{ $value | printf \"%.1f\" }}s (threshold: 10s)"
+
+  # ==========================================================================
+  # Rate Limiting Alerts
+  # ==========================================================================
+  - name: servo_rate_limiting
+    rules:
+      # Rate limit rejections increasing
+      - alert: ServoRateLimitRejections
+        expr: |
+          sum(rate(servo_rate_limit_rejections_total[5m])) > 1
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Rate limit rejections occurring"
+          description: "{{ $value | printf \"%.2f\" }} requests/sec being rejected"
+          runbook_url: "https://docs.servo.io/runbooks/rate-limit-rejections"
+
+      # Tenant-specific rate limiting (possible abuse)
+      - alert: ServoTenantRateLimited
+        expr: |
+          sum by (tenant_id) (rate(servo_rate_limit_rejections_total{limiter_type="tenant"}[5m])) > 0.5
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Tenant being rate limited"
+          description: "Tenant {{ $labels.tenant_id }} hitting rate limits"
+          runbook_url: "https://docs.servo.io/runbooks/tenant-rate-limited"
+
+  # ==========================================================================
+  # Infrastructure Health Alerts
+  # ==========================================================================
+  - name: servo_infrastructure
+    rules:
+      # Database operations slow
+      - alert: ServoSlowDatabaseOperations
+        expr: |
+          histogram_quantile(0.99,
+            sum(rate(servo_db_operation_duration_seconds_bucket[5m])) by (le, operation)
+          ) > 1
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Database operations running slowly"
+          description: "P99 DB operation latency is {{ $value | printf \"%.2f\" }}s"
+          runbook_url: "https://docs.servo.io/runbooks/slow-database"
+
+      # High execution create failures
+      - alert: ServoExecutionCreateFailures
+        expr: |
+          (
+            sum(rate(servo_execution_create_total{status="failure"}[5m]))
+            / sum(rate(servo_execution_create_total[5m]))
+          ) > 0.05
+        for: 5m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: "High execution creation failure rate"
+          description: "{{ $value | printf \"%.1f\" }}% of execution creates failing"
+          runbook_url: "https://docs.servo.io/runbooks/execution-create-failures"
+
+      # HTTP 5xx errors
+      - alert: ServoHTTP5xxErrors
+        expr: |
+          (
+            sum(rate(servo_http_requests_total{status_code=~"5.."}[5m]))
+            / sum(rate(servo_http_requests_total[5m]))
+          ) > 0.01
+        for: 5m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: "High HTTP 5xx error rate"
+          description: "{{ $value | printf \"%.2f\" }}% of requests returning 5xx errors"
+          runbook_url: "https://docs.servo.io/runbooks/http-5xx-errors"
+
+      # No traffic (possible issue with load balancer or service)
+      - alert: ServoNoTraffic
+        expr: |
+          sum(rate(servo_http_requests_total[5m])) == 0
+        for: 15m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "No HTTP traffic to Servo"
+          description: "No requests received in 15 minutes. Check service health."
+          runbook_url: "https://docs.servo.io/runbooks/no-traffic"
+
+  # ==========================================================================
+  # Capacity Alerts
+  # ==========================================================================
+  - name: servo_capacity
+    rules:
+      # Too many active tenant limiters (memory concern)
+      - alert: ServoHighTenantCardinality
+        expr: servo_active_tenant_limiters > 80
+        for: 10m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "High number of active tenant rate limiters"
+          description: "{{ $value }} active tenant limiters (threshold: 80)"
+          runbook_url: "https://docs.servo.io/runbooks/high-tenant-cardinality"
+
+      # Large workflows (may need resource adjustment)
+      - alert: ServoLargeWorkflows
+        expr: |
+          histogram_quantile(0.99,
+            sum(rate(servo_workflow_asset_count_bucket[1h])) by (le)
+          ) > 100
+        for: 1h
+        labels:
+          severity: info
+          team: platform
+        annotations:
+          summary: "Large workflows detected"
+          description: "P99 workflow size is {{ $value | printf \"%.0f\" }} assets"
+
+  # ==========================================================================
+  # Workflow State Alerts
+  # ==========================================================================
+  - name: servo_workflow_state
+    rules:
+      # High state transition failures
+      - alert: ServoStateTransitionFailures
+        expr: |
+          (
+            sum(rate(servo_execution_state_transition_total{status="failure"}[5m]))
+            / sum(rate(servo_execution_state_transition_total[5m]))
+          ) > 0.01
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "High execution state transition failure rate"
+          description: "{{ $value | printf \"%.2f\" }}% of state transitions failing"
+          runbook_url: "https://docs.servo.io/runbooks/state-transition-failures"
+
+      # Executions stuck (not transitioning from pending)
+      - alert: ServoStuckExecutions
+        expr: |
+          sum(rate(servo_execution_state_transition_total{from_state="pending", to_state="running"}[15m])) == 0
+          and
+          sum(rate(servo_execution_create_total{status="success"}[15m])) > 0
+        for: 15m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Executions may be stuck in pending state"
+          description: "New executions created but none transitioning to running"
+          runbook_url: "https://docs.servo.io/runbooks/stuck-executions"
+
+      # High timeout rate
+      - alert: ServoHighTimeoutRate
+        expr: |
+          (
+            sum(rate(servo_workflow_executions_total{status="timeout"}[15m]))
+            / sum(rate(servo_workflow_executions_total[15m]))
+          ) > 0.05
+        for: 15m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "High workflow timeout rate"
+          description: "{{ $value | printf \"%.1f\" }}% of workflows timing out"
+          runbook_url: "https://docs.servo.io/runbooks/workflow-timeouts"
