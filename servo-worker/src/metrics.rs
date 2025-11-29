@@ -81,6 +81,40 @@ pub static WORKFLOW_ASSET_COUNT: LazyLock<HistogramVec> = LazyLock::new(|| {
 });
 
 // ============================================================================
+// Data Quality Check Metrics
+// ============================================================================
+
+/// Total number of data quality checks executed.
+///
+/// Labels:
+/// - `tenant_id`: Tenant identifier
+/// - `outcome`: passed | failed | error | skipped
+pub static CHECK_EXECUTIONS_TOTAL: LazyLock<CounterVec> = LazyLock::new(|| {
+    register_counter_vec!(
+        "servo_check_executions_total",
+        "Total number of data quality checks executed",
+        &["tenant_id", "outcome"]
+    )
+    .expect("Failed to register servo_check_executions_total metric")
+});
+
+/// Duration of data quality check batches in seconds.
+///
+/// Labels:
+/// - `tenant_id`: Tenant identifier
+///
+/// Buckets: 10ms, 50ms, 100ms, 250ms, 500ms, 1s, 2.5s, 5s, 10s
+pub static CHECK_DURATION_SECONDS: LazyLock<HistogramVec> = LazyLock::new(|| {
+    register_histogram_vec!(
+        "servo_check_duration_seconds",
+        "Duration of data quality check batches in seconds",
+        &["tenant_id"],
+        vec![0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0]
+    )
+    .expect("Failed to register servo_check_duration_seconds metric")
+});
+
+// ============================================================================
 // Rate Limiting Metrics
 // ============================================================================
 
@@ -144,8 +178,282 @@ pub static HTTP_REQUEST_DURATION_SECONDS: LazyLock<HistogramVec> = LazyLock::new
 });
 
 // ============================================================================
+// Database Metrics
+// ============================================================================
+
+/// Duration of database operations in seconds.
+///
+/// Labels:
+/// - `operation`: query | insert | update | delete | transaction
+///
+/// Buckets: 1ms, 5ms, 10ms, 25ms, 50ms, 100ms, 250ms, 500ms, 1s, 5s
+pub static DB_OPERATION_DURATION_SECONDS: LazyLock<HistogramVec> = LazyLock::new(|| {
+    register_histogram_vec!(
+        "servo_db_operation_duration_seconds",
+        "Duration of database operations in seconds",
+        &["operation"],
+        vec![0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 5.0]
+    )
+    .expect("Failed to register servo_db_operation_duration_seconds metric")
+});
+
+// ============================================================================
+// Circuit Breaker Metrics
+// ============================================================================
+
+/// Circuit breaker state gauge.
+///
+/// Labels:
+/// - `service`: Name of the protected service
+///
+/// Values:
+/// - 0 = Closed (normal operation)
+/// - 1 = Half-Open (testing recovery)
+/// - 2 = Open (failing fast)
+pub static CIRCUIT_BREAKER_STATE: LazyLock<prometheus::GaugeVec> = LazyLock::new(|| {
+    prometheus::register_gauge_vec!(
+        "servo_circuit_breaker_state",
+        "Circuit breaker state (0=closed, 1=half-open, 2=open)",
+        &["service"]
+    )
+    .expect("Failed to register servo_circuit_breaker_state metric")
+});
+
+/// Total number of circuit breaker transitions.
+///
+/// Labels:
+/// - `service`: Name of the protected service
+/// - `from_state`: Previous state (closed, half_open, open)
+/// - `to_state`: New state (closed, half_open, open)
+pub static CIRCUIT_BREAKER_TRANSITIONS_TOTAL: LazyLock<CounterVec> = LazyLock::new(|| {
+    register_counter_vec!(
+        "servo_circuit_breaker_transitions_total",
+        "Total number of circuit breaker state transitions",
+        &["service", "from_state", "to_state"]
+    )
+    .expect("Failed to register servo_circuit_breaker_transitions_total metric")
+});
+
+/// Time spent in open state before recovery (histogram for MTTR tracking).
+///
+/// Labels:
+/// - `service`: Name of the protected service
+///
+/// Buckets: 1s, 5s, 10s, 30s, 60s, 120s, 300s, 600s
+pub static CIRCUIT_BREAKER_RECOVERY_SECONDS: LazyLock<HistogramVec> = LazyLock::new(|| {
+    register_histogram_vec!(
+        "servo_circuit_breaker_recovery_seconds",
+        "Time to recover from circuit breaker open state",
+        &["service"],
+        vec![1.0, 5.0, 10.0, 30.0, 60.0, 120.0, 300.0, 600.0]
+    )
+    .expect("Failed to register servo_circuit_breaker_recovery_seconds metric")
+});
+
+// ============================================================================
+// Execution Queue Metrics (for backpressure monitoring)
+// ============================================================================
+
+/// Current execution queue depth (pending executions).
+///
+/// Labels:
+/// - `state`: pending | running
+pub static EXECUTION_QUEUE_DEPTH: LazyLock<prometheus::GaugeVec> = LazyLock::new(|| {
+    prometheus::register_gauge_vec!(
+        "servo_execution_queue_depth",
+        "Current number of executions by state",
+        &["state"]
+    )
+    .expect("Failed to register servo_execution_queue_depth metric")
+});
+
+/// Time from execution creation to start (queue wait time).
+///
+/// Labels:
+/// - `tenant_id`: Tenant identifier
+///
+/// Buckets: 100ms, 500ms, 1s, 5s, 10s, 30s, 60s, 300s
+pub static EXECUTION_QUEUE_WAIT_SECONDS: LazyLock<HistogramVec> = LazyLock::new(|| {
+    register_histogram_vec!(
+        "servo_execution_queue_wait_seconds",
+        "Time spent waiting in queue before execution starts",
+        &["tenant_id"],
+        vec![0.1, 0.5, 1.0, 5.0, 10.0, 30.0, 60.0, 300.0]
+    )
+    .expect("Failed to register servo_execution_queue_wait_seconds metric")
+});
+
+// ============================================================================
+// Error Detection Metrics (MTTD - Mean Time To Detect)
+// ============================================================================
+
+/// Time from error occurrence to detection in execution.
+///
+/// This helps measure how quickly we detect failures.
+///
+/// Labels:
+/// - `error_type`: timeout | check_failure | internal | dependency
+///
+/// Buckets: 100ms, 500ms, 1s, 5s, 10s, 30s, 60s
+pub static ERROR_DETECTION_SECONDS: LazyLock<HistogramVec> = LazyLock::new(|| {
+    register_histogram_vec!(
+        "servo_error_detection_seconds",
+        "Time to detect errors in workflow execution",
+        &["error_type"],
+        vec![0.1, 0.5, 1.0, 5.0, 10.0, 30.0, 60.0]
+    )
+    .expect("Failed to register servo_error_detection_seconds metric")
+});
+
+// ============================================================================
+// Dependency Health Metrics
+// ============================================================================
+
+/// Latency to external dependencies.
+///
+/// Labels:
+/// - `dependency`: database | cloud_tasks | external_api
+///
+/// Buckets: 1ms, 5ms, 10ms, 25ms, 50ms, 100ms, 250ms, 500ms, 1s
+pub static DEPENDENCY_LATENCY_SECONDS: LazyLock<HistogramVec> = LazyLock::new(|| {
+    register_histogram_vec!(
+        "servo_dependency_latency_seconds",
+        "Latency to external dependencies",
+        &["dependency"],
+        vec![0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0]
+    )
+    .expect("Failed to register servo_dependency_latency_seconds metric")
+});
+
+/// Health status of dependencies.
+///
+/// Labels:
+/// - `dependency`: database | cloud_tasks | external_api
+///
+/// Values: 0 = unhealthy, 1 = healthy
+pub static DEPENDENCY_HEALTH: LazyLock<prometheus::GaugeVec> = LazyLock::new(|| {
+    prometheus::register_gauge_vec!(
+        "servo_dependency_health",
+        "Health status of dependencies (0=unhealthy, 1=healthy)",
+        &["dependency"]
+    )
+    .expect("Failed to register servo_dependency_health metric")
+});
+
+// ============================================================================
 // Helper Functions
 // ============================================================================
+
+/// Record a database operation duration.
+///
+/// # Arguments
+///
+/// * `operation` - Operation type: "query", "insert", "update", "delete", "transaction"
+/// * `duration_secs` - Operation duration in seconds
+pub fn record_db_operation(operation: &str, duration_secs: f64) {
+    DB_OPERATION_DURATION_SECONDS
+        .with_label_values(&[operation])
+        .observe(duration_secs);
+}
+
+/// Record a circuit breaker state transition.
+///
+/// # Arguments
+///
+/// * `service` - Name of the protected service
+/// * `from_state` - Previous state
+/// * `to_state` - New state
+/// * `new_state_value` - Numeric value for new state (0=closed, 1=half-open, 2=open)
+pub fn record_circuit_breaker_transition(
+    service: &str,
+    from_state: &str,
+    to_state: &str,
+    new_state_value: f64,
+) {
+    CIRCUIT_BREAKER_STATE
+        .with_label_values(&[service])
+        .set(new_state_value);
+
+    CIRCUIT_BREAKER_TRANSITIONS_TOTAL
+        .with_label_values(&[service, from_state, to_state])
+        .inc();
+}
+
+/// Record circuit breaker recovery time.
+///
+/// # Arguments
+///
+/// * `service` - Name of the protected service
+/// * `recovery_secs` - Time spent in open state before recovery
+pub fn record_circuit_breaker_recovery(service: &str, recovery_secs: f64) {
+    CIRCUIT_BREAKER_RECOVERY_SECONDS
+        .with_label_values(&[service])
+        .observe(recovery_secs);
+}
+
+/// Update execution queue depth.
+///
+/// # Arguments
+///
+/// * `pending` - Number of pending executions
+/// * `running` - Number of running executions
+pub fn set_execution_queue_depth(pending: i64, running: i64) {
+    EXECUTION_QUEUE_DEPTH
+        .with_label_values(&["pending"])
+        .set(pending as f64);
+    EXECUTION_QUEUE_DEPTH
+        .with_label_values(&["running"])
+        .set(running as f64);
+}
+
+/// Record execution queue wait time.
+///
+/// # Arguments
+///
+/// * `tenant_id` - Tenant identifier
+/// * `wait_secs` - Time spent waiting in queue
+pub fn record_execution_queue_wait(tenant_id: &str, wait_secs: f64) {
+    let label = get_tenant_label(tenant_id);
+    EXECUTION_QUEUE_WAIT_SECONDS
+        .with_label_values(&[label])
+        .observe(wait_secs);
+}
+
+/// Record time to detect an error.
+///
+/// # Arguments
+///
+/// * `error_type` - Type of error detected
+/// * `detection_secs` - Time from error occurrence to detection
+pub fn record_error_detection(error_type: &str, detection_secs: f64) {
+    ERROR_DETECTION_SECONDS
+        .with_label_values(&[error_type])
+        .observe(detection_secs);
+}
+
+/// Record dependency latency.
+///
+/// # Arguments
+///
+/// * `dependency` - Name of the dependency
+/// * `latency_secs` - Latency in seconds
+pub fn record_dependency_latency(dependency: &str, latency_secs: f64) {
+    DEPENDENCY_LATENCY_SECONDS
+        .with_label_values(&[dependency])
+        .observe(latency_secs);
+}
+
+/// Set dependency health status.
+///
+/// # Arguments
+///
+/// * `dependency` - Name of the dependency
+/// * `healthy` - Whether the dependency is healthy
+pub fn set_dependency_health(dependency: &str, healthy: bool) {
+    DEPENDENCY_HEALTH
+        .with_label_values(&[dependency])
+        .set(if healthy { 1.0 } else { 0.0 });
+}
 
 /// Record a workflow execution with its outcome and duration.
 ///
@@ -167,6 +475,73 @@ pub fn record_execution(status: &str, tenant_id: &str, duration_secs: f64, asset
     WORKFLOW_ASSET_COUNT
         .with_label_values(&[tenant_id])
         .observe(asset_count as f64);
+}
+
+/// Maximum number of unique tenant IDs to track in metrics.
+/// Beyond this limit, tenant_id is aggregated as "other" to prevent cardinality explosion.
+const MAX_TENANT_CARDINALITY: usize = 100;
+
+/// Track unique tenants seen for cardinality protection
+static SEEN_TENANTS: LazyLock<std::sync::RwLock<std::collections::HashSet<String>>> =
+    LazyLock::new(|| std::sync::RwLock::new(std::collections::HashSet::new()));
+
+/// Get tenant label with cardinality protection.
+/// Returns "other" if too many unique tenants have been seen.
+fn get_tenant_label(tenant_id: &str) -> &str {
+    let seen = SEEN_TENANTS.read().unwrap();
+    if seen.contains(tenant_id) {
+        return tenant_id;
+    }
+    drop(seen);
+
+    let mut seen = SEEN_TENANTS.write().unwrap();
+    if seen.len() >= MAX_TENANT_CARDINALITY {
+        "other"
+    } else {
+        seen.insert(tenant_id.to_string());
+        tenant_id
+    }
+}
+
+/// Record data quality check execution metrics.
+///
+/// # Arguments
+///
+/// * `tenant_id` - Tenant identifier (cardinality-protected)
+/// * `passed` - Number of checks that passed
+/// * `failed` - Number of checks that failed
+/// * `skipped` - Number of checks that were skipped
+/// * `duration_secs` - Total duration of check batch in seconds
+pub fn record_check_execution(
+    tenant_id: &str,
+    passed: usize,
+    failed: usize,
+    skipped: usize,
+    duration_secs: f64,
+) {
+    let label = get_tenant_label(tenant_id);
+
+    if passed > 0 {
+        CHECK_EXECUTIONS_TOTAL
+            .with_label_values(&[label, "passed"])
+            .inc_by(passed as f64);
+    }
+
+    if failed > 0 {
+        CHECK_EXECUTIONS_TOTAL
+            .with_label_values(&[label, "failed"])
+            .inc_by(failed as f64);
+    }
+
+    if skipped > 0 {
+        CHECK_EXECUTIONS_TOTAL
+            .with_label_values(&[label, "skipped"])
+            .inc_by(skipped as f64);
+    }
+
+    CHECK_DURATION_SECONDS
+        .with_label_values(&[label])
+        .observe(duration_secs);
 }
 
 /// Record a rate limit rejection.
@@ -234,15 +609,43 @@ impl Timer {
 /// the first request, avoiding potential race conditions.
 pub fn init_metrics() {
     // Force initialization of all LazyLock metrics
+    // Workflow metrics
     let _ = &*WORKFLOW_EXECUTIONS_TOTAL;
     let _ = &*WORKFLOW_DURATION_SECONDS;
     let _ = &*WORKFLOW_ASSET_COUNT;
+
+    // Data quality check metrics
+    let _ = &*CHECK_EXECUTIONS_TOTAL;
+    let _ = &*CHECK_DURATION_SECONDS;
+
+    // Rate limiting metrics
     let _ = &*RATE_LIMIT_REJECTIONS_TOTAL;
     let _ = &*ACTIVE_TENANT_LIMITERS;
+
+    // HTTP metrics
     let _ = &*HTTP_REQUESTS_TOTAL;
     let _ = &*HTTP_REQUEST_DURATION_SECONDS;
 
-    tracing::info!("Prometheus metrics initialized");
+    // Database metrics
+    let _ = &*DB_OPERATION_DURATION_SECONDS;
+
+    // Circuit breaker metrics
+    let _ = &*CIRCUIT_BREAKER_STATE;
+    let _ = &*CIRCUIT_BREAKER_TRANSITIONS_TOTAL;
+    let _ = &*CIRCUIT_BREAKER_RECOVERY_SECONDS;
+
+    // Execution queue metrics
+    let _ = &*EXECUTION_QUEUE_DEPTH;
+    let _ = &*EXECUTION_QUEUE_WAIT_SECONDS;
+
+    // Error detection metrics
+    let _ = &*ERROR_DETECTION_SECONDS;
+
+    // Dependency health metrics
+    let _ = &*DEPENDENCY_LATENCY_SECONDS;
+    let _ = &*DEPENDENCY_HEALTH;
+
+    tracing::info!("Prometheus metrics initialized (including MTTR-focused metrics)");
 }
 
 #[cfg(test)]

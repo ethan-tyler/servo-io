@@ -54,6 +54,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 opentelemetry = { workspace = true }
 opentelemetry_sdk = { workspace = true }
 opentelemetry-otlp = { workspace = true }
+opentelemetry-stdout = { workspace = true }
 opentelemetry-semantic-conventions = { workspace = true }
 tracing-opentelemetry = { workspace = true }
 tonic = { workspace = true }
@@ -71,6 +72,9 @@ reqwest = { workspace = true }
 
 # Metrics
 prometheus = { version = "0.13", features = ["process"] }
+
+# PII filtering
+regex = "1.10"
 
 # Internal dependencies
 servo-core = { path = "../servo-core" }

@@ -31,9 +31,53 @@ use opentelemetry_sdk::{
 };
 use opentelemetry_semantic_conventions::resource::{SERVICE_NAME, SERVICE_VERSION};
 use std::time::Duration;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+use tracing_subscriber::{
+    fmt,
+    layer::SubscriberExt,
+    util::SubscriberInitExt,
+    EnvFilter, Layer,
+};
 
 use crate::sensitive_filter::SensitiveDataFilteringExporter;
+
+/// Trace exporter type for local development vs production.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TraceExporter {
+    /// OTLP export to Cloud Trace (production)
+    Otlp,
+    /// Jaeger for local development
+    Jaeger,
+    /// Console/stdout output for debugging
+    Stdout,
+    /// No exporter (tracing disabled)
+    None,
+}
+
+impl TraceExporter {
+    /// Parse exporter type from environment variable.
+    ///
+    /// Valid values: `otlp` (default), `jaeger`, `stdout`/`console`, `none`/`disabled`
+    pub fn from_env() -> Self {
+        let value = std::env::var("SERVO_TRACE_EXPORTER")
+            .unwrap_or_else(|_| "otlp".to_string())
+            .to_lowercase();
+
+        match value.as_str() {
+            "otlp" => TraceExporter::Otlp,
+            "jaeger" => TraceExporter::Jaeger,
+            "stdout" | "console" => TraceExporter::Stdout,
+            "none" | "disabled" => TraceExporter::None,
+            unknown => {
+                eprintln!(
+                    "Warning: Unknown SERVO_TRACE_EXPORTER value '{}', defaulting to 'otlp'. \
+                     Valid values: otlp, jaeger, stdout, console, none, disabled",
+                    unknown
+                );
+                TraceExporter::Otlp
+            }
+        }
+    }
+}
 
 /// Configuration for distributed tracing.
 #[derive(Debug, Clone)]
@@ -50,6 +94,10 @@ pub struct TracingConfig {
     pub otlp_endpoint: Option<String>,
     /// GCP project ID (for Cloud Trace)
     pub gcp_project_id: Option<String>,
+    /// Trace exporter type
+    pub exporter: TraceExporter,
+    /// Jaeger endpoint for local development
+    pub jaeger_endpoint: Option<String>,
 }
 
 impl Default for TracingConfig {
@@ -106,32 +154,77 @@ impl TracingConfig {
                 .unwrap_or_else(|_| env!("CARGO_PKG_VERSION").to_string()),
             otlp_endpoint: std::env::var("SERVO_OTLP_ENDPOINT").ok(),
             gcp_project_id: std::env::var("GCP_PROJECT_ID").ok(),
+            exporter: TraceExporter::from_env(),
+            jaeger_endpoint: std::env::var("SERVO_JAEGER_ENDPOINT").ok(),
         }
     }
 }
 
+/// Build a JSON formatting layer with full span context for log-trace correlation.
+///
+/// This enables log-trace correlation by including span metadata in logs:
+/// - Current span name and fields (including trace_id via OpenTelemetry)
+/// - Full span list showing the call hierarchy
+/// - File and line number for debugging
+///
+/// When used with `tracing-opentelemetry`, logs automatically include:
+/// - `span`: Current span with all fields (execution_id, tenant_id, etc.)
+/// - `spans`: Full span hierarchy
+/// - Span fields propagated from parent spans
+fn build_json_logging_layer<S>() -> impl Layer<S>
+where
+    S: tracing::Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a>,
+{
+    fmt::layer()
+        .json()
+        // Include current span and all parent spans for full context
+        .with_current_span(true)
+        .with_span_list(true)
+        // Include source location for debugging
+        .with_file(true)
+        .with_line_number(true)
+        // Include thread info for concurrent debugging
+        .with_thread_ids(true)
+        // Use flat event format for Cloud Logging compatibility
+        .flatten_event(true)
+}
+
 /// Initialize tracing with OpenTelemetry support.
 ///
+/// Supports multiple exporter types via `SERVO_TRACE_EXPORTER`:
+/// - `otlp` (default): Cloud Trace via OTLP protocol
+/// - `jaeger`: Local Jaeger instance for development
+/// - `stdout`: Console output for debugging
+/// - `none`: Disable tracing export
+///
 /// When `config.enabled` is true, initializes:
-/// - OpenTelemetry tracer provider with OTLP exporter
+/// - OpenTelemetry tracer provider with configured exporter
 /// - tracing-opentelemetry bridge layer
-/// - JSON formatting for Cloud Logging compatibility
+/// - JSON formatting with log-trace correlation
 ///
 /// When `config.enabled` is false, initializes standard tracing with JSON output.
 ///
+/// # Log-Trace Correlation
+///
+/// All logs include span context (execution_id, tenant_id, etc.) enabling:
+/// - Filtering logs by execution in Cloud Logging
+/// - Jumping from logs to traces in Cloud Console
+/// - Correlating errors across distributed services
+///
 /// # Errors
 ///
-/// Returns an error if the OTLP exporter fails to initialize.
+/// Returns an error if the exporter fails to initialize.
 pub fn init_tracing(
     config: &TracingConfig,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let env_filter = EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| "servo_worker=info,tower_http=info".into());
 
-    if config.enabled {
+    if config.enabled && config.exporter != TraceExporter::None {
         tracing::info!(
             sample_rate = config.sample_rate,
             service_name = %config.service_name,
+            exporter = ?config.exporter,
             "Initializing OpenTelemetry tracing"
         );
 
@@ -146,32 +239,63 @@ pub fn init_tracing(
         let sampler =
             Sampler::ParentBased(Box::new(Sampler::TraceIdRatioBased(config.sample_rate)));
 
-        // Configure OTLP exporter
-        let endpoint = config.otlp_endpoint.clone().unwrap_or_else(|| {
-            // Default to Cloud Trace endpoint
-            "https://cloudtrace.googleapis.com".to_string()
-        });
-
-        let base_exporter = opentelemetry_otlp::new_exporter()
-            .tonic()
-            .with_endpoint(&endpoint)
-            .with_timeout(Duration::from_secs(10))
-            .build_span_exporter()?;
-
-        // Wrap exporter with sensitive data filter to redact PII/secrets
-        let filtered_exporter = SensitiveDataFilteringExporter::new(base_exporter);
-
-        // Build trace config with sampler and resource
+        // Build trace config
         let trace_config = Config::default()
             .with_sampler(sampler)
             .with_id_generator(RandomIdGenerator::default())
             .with_resource(resource);
 
-        // Build tracer provider with filtered exporter
-        let provider = TracerProvider::builder()
-            .with_batch_exporter(filtered_exporter, runtime::Tokio)
-            .with_config(trace_config)
-            .build();
+        // Build tracer provider based on exporter type
+        let provider = match config.exporter {
+            TraceExporter::Otlp => {
+                let endpoint = config.otlp_endpoint.clone().unwrap_or_else(|| {
+                    "https://cloudtrace.googleapis.com".to_string()
+                });
+
+                let base_exporter = opentelemetry_otlp::new_exporter()
+                    .tonic()
+                    .with_endpoint(&endpoint)
+                    .with_timeout(Duration::from_secs(10))
+                    .build_span_exporter()?;
+
+                // Wrap exporter with sensitive data filter to redact PII/secrets
+                let filtered_exporter = SensitiveDataFilteringExporter::new(base_exporter);
+
+                TracerProvider::builder()
+                    .with_batch_exporter(filtered_exporter, runtime::Tokio)
+                    .with_config(trace_config)
+                    .build()
+            }
+            TraceExporter::Jaeger => {
+                let endpoint = config.jaeger_endpoint.clone().unwrap_or_else(|| {
+                    "http://localhost:4317".to_string()
+                });
+
+                let base_exporter = opentelemetry_otlp::new_exporter()
+                    .tonic()
+                    .with_endpoint(&endpoint)
+                    .with_timeout(Duration::from_secs(10))
+                    .build_span_exporter()?;
+
+                TracerProvider::builder()
+                    .with_batch_exporter(base_exporter, runtime::Tokio)
+                    .with_config(trace_config)
+                    .build()
+            }
+            TraceExporter::Stdout => {
+                // Use simple exporter for stdout - no batching needed
+                let exporter = opentelemetry_stdout::SpanExporter::default();
+
+                TracerProvider::builder()
+                    .with_simple_exporter(exporter)
+                    .with_config(trace_config)
+                    .build()
+            }
+            TraceExporter::None => {
+                // This case is handled above, but included for completeness
+                return init_tracing_without_otel(env_filter);
+            }
+        };
 
         let tracer = provider.tracer("servo-worker");
 
@@ -181,24 +305,35 @@ pub fn init_tracing(
         // Build OpenTelemetry layer for tracing
         let otel_layer = tracing_opentelemetry::layer().with_tracer(tracer);
 
-        // Initialize subscriber with all layers
+        // Initialize subscriber with all layers including log-trace correlation
         tracing_subscriber::registry()
             .with(env_filter)
-            .with(tracing_subscriber::fmt::layer().json())
+            .with(build_json_logging_layer())
             .with(otel_layer)
             .init();
 
-        tracing::info!("OpenTelemetry tracing initialized successfully");
+        tracing::info!(
+            exporter = ?config.exporter,
+            "OpenTelemetry tracing initialized with log-trace correlation"
+        );
     } else {
-        // Standard tracing without OpenTelemetry
-        tracing_subscriber::registry()
-            .with(env_filter)
-            .with(tracing_subscriber::fmt::layer().json())
-            .init();
-
-        tracing::info!("Tracing initialized (OpenTelemetry disabled)");
+        return init_tracing_without_otel(env_filter);
     }
 
+    Ok(())
+}
+
+/// Initialize tracing without OpenTelemetry (fallback mode).
+fn init_tracing_without_otel(
+    env_filter: EnvFilter,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    // Standard tracing without OpenTelemetry but with enhanced JSON logging
+    tracing_subscriber::registry()
+        .with(env_filter)
+        .with(build_json_logging_layer())
+        .init();
+
+    tracing::info!("Tracing initialized (OpenTelemetry disabled, log-trace correlation via spans)");
     Ok(())
 }
 

@@ -1,0 +1,195 @@
+# Servo Service Level Objectives (SLOs)
+# Based on Google SRE best practices for reliability management
+#
+# SLI = Service Level Indicator (measurement)
+# SLO = Service Level Objective (target)
+# Error Budget = 100% - SLO (acceptable failure rate)
+
+---
+apiVersion: servo.io/v1
+kind: SLODocument
+metadata:
+  name: servo-platform-slos
+  version: "1.0.0"
+
+spec:
+  # Default rolling window for all SLOs
+  defaultWindow: 30d
+
+  # =============================================================================
+  # Availability SLOs
+  # =============================================================================
+  availability:
+    http_availability:
+      name: "HTTP API Availability"
+      description: "Percentage of HTTP requests that complete successfully (non-5xx)"
+      target: 99.9%  # 43.2 minutes error budget per month
+      sli:
+        type: ratio
+        good: 'sum(rate(servo_http_requests_total{status_code!~"5.."}[5m]))'
+        total: 'sum(rate(servo_http_requests_total[5m]))'
+      window: 30d
+      alerting:
+        burnRate:
+          # Fast burn: 14.4x = 2% budget in 1 hour, page immediately
+          fast: { rate: 14.4, shortWindow: 5m, longWindow: 1h }
+          # Slow burn: 3x = 10% budget in 3 days, create ticket
+          slow: { rate: 3.0, shortWindow: 30m, longWindow: 6h }
+
+    workflow_availability:
+      name: "Workflow Execution Availability"
+      description: "Percentage of workflow executions that complete successfully"
+      target: 99.9%
+      sli:
+        type: ratio
+        good: 'sum(rate(servo_workflow_executions_total{status="succeeded"}[5m]))'
+        total: 'sum(rate(servo_workflow_executions_total[5m]))'
+      window: 30d
+      alerting:
+        burnRate:
+          fast: { rate: 14.4, shortWindow: 5m, longWindow: 1h }
+          slow: { rate: 3.0, shortWindow: 30m, longWindow: 6h }
+
+  # =============================================================================
+  # Latency SLOs
+  # =============================================================================
+  latency:
+    http_latency:
+      name: "HTTP API Latency"
+      description: "P99 latency for HTTP requests should be under 500ms"
+      target: 99.0%  # 99% of requests under threshold
+      threshold: 500ms
+      sli:
+        type: histogram
+        metric: servo_http_request_duration_seconds
+        # Good = requests that complete in under 500ms
+        good: 'sum(rate(servo_http_request_duration_seconds_bucket{le="0.5"}[5m]))'
+        total: 'sum(rate(servo_http_request_duration_seconds_count[5m]))'
+      window: 30d
+      alerting:
+        burnRate:
+          fast: { rate: 14.4, shortWindow: 5m, longWindow: 1h }
+          slow: { rate: 6.0, shortWindow: 30m, longWindow: 6h }
+
+    workflow_duration:
+      name: "Workflow Execution Duration"
+      description: "P95 of workflow executions complete within 5 minutes"
+      target: 95.0%
+      threshold: 5m
+      sli:
+        type: histogram
+        metric: servo_workflow_duration_seconds
+        good: 'sum(rate(servo_workflow_duration_seconds_bucket{le="300"}[5m]))'
+        total: 'sum(rate(servo_workflow_duration_seconds_count[5m]))'
+      window: 30d
+      alerting:
+        burnRate:
+          fast: { rate: 14.4, shortWindow: 5m, longWindow: 1h }
+          slow: { rate: 3.0, shortWindow: 1h, longWindow: 6h }
+
+  # =============================================================================
+  # Data Quality SLOs
+  # =============================================================================
+  quality:
+    check_pass_rate:
+      name: "Data Quality Check Pass Rate"
+      description: "Percentage of data quality checks that pass"
+      target: 95.0%  # 5% failure budget for quality issues
+      sli:
+        type: ratio
+        good: 'sum(rate(servo_check_executions_total{outcome="passed"}[5m]))'
+        total: 'sum(rate(servo_check_executions_total{outcome!="skipped"}[5m]))'
+      window: 7d  # Shorter window for quality metrics
+      alerting:
+        burnRate:
+          fast: { rate: 10.0, shortWindow: 5m, longWindow: 1h }
+          slow: { rate: 2.0, shortWindow: 1h, longWindow: 6h }
+
+  # =============================================================================
+  # Infrastructure SLOs
+  # =============================================================================
+  infrastructure:
+    database_latency:
+      name: "Database Operation Latency"
+      description: "P99 database operations complete within 100ms"
+      target: 99.0%
+      threshold: 100ms
+      sli:
+        type: histogram
+        metric: servo_db_operation_duration_seconds
+        good: 'sum(rate(servo_db_operation_duration_seconds_bucket{le="0.1"}[5m]))'
+        total: 'sum(rate(servo_db_operation_duration_seconds_count[5m]))'
+      window: 30d
+      alerting:
+        burnRate:
+          fast: { rate: 14.4, shortWindow: 5m, longWindow: 1h }
+          slow: { rate: 6.0, shortWindow: 30m, longWindow: 6h }
+
+    rate_limit_success:
+      name: "Rate Limit Acceptance Rate"
+      description: "Percentage of requests not rejected by rate limiting"
+      target: 99.5%  # 0.5% rejection budget
+      sli:
+        type: custom
+        expression: |
+          1 - (
+            sum(rate(servo_rate_limit_rejections_total[5m])) /
+            sum(rate(servo_http_requests_total[5m]))
+          )
+      window: 30d
+      alerting:
+        burnRate:
+          fast: { rate: 14.4, shortWindow: 5m, longWindow: 1h }
+          slow: { rate: 3.0, shortWindow: 30m, longWindow: 6h }
+
+---
+# Error Budget Policy
+# Defines actions to take based on error budget consumption
+
+apiVersion: servo.io/v1
+kind: ErrorBudgetPolicy
+metadata:
+  name: servo-error-budget-policy
+
+spec:
+  # Budget thresholds and actions
+  thresholds:
+    - percentage: 100
+      status: healthy
+      actions: []
+
+    - percentage: 50
+      status: caution
+      actions:
+        - type: notification
+          channel: slack
+          message: "50% of error budget consumed for {slo_name}"
+
+    - percentage: 25
+      status: at_risk
+      actions:
+        - type: notification
+          channel: slack
+          message: "75% of error budget consumed for {slo_name}"
+        - type: freeze
+          scope: non_critical_deployments
+
+    - percentage: 0
+      status: exhausted
+      actions:
+        - type: notification
+          channel: pagerduty
+          severity: critical
+          message: "Error budget exhausted for {slo_name}"
+        - type: freeze
+          scope: all_deployments
+        - type: incident
+          priority: P2
+          title: "Error budget exhausted: {slo_name}"
+
+  # Recovery policy
+  recovery:
+    # Minimum recovery before unfreezing deployments
+    minimumBudget: 10%
+    # Cooldown period after budget recovery
+    cooldownPeriod: 24h

@@ -1,0 +1,443 @@
+# Servo SLO Burn Rate Alerts
+# Multi-window, multi-burn-rate alerting based on Google SRE best practices
+#
+# Alert Strategy:
+# - Fast burn (14.4x): Consumes 2% of 30-day budget in 1 hour -> Page immediately
+# - Slow burn (3x): Consumes 10% of 30-day budget in 3 days -> Create ticket
+#
+# Each SLO has two alert rules:
+# 1. Page-level: Fast burn, requires immediate attention
+# 2. Ticket-level: Slow burn, requires investigation within hours
+
+groups:
+  # ===========================================================================
+  # HTTP Availability SLO Alerts (Target: 99.9%)
+  # Error budget: 43.2 minutes per 30 days
+  # ===========================================================================
+  - name: servo.slo.http_availability
+    rules:
+      # Fast burn: 14.4x burn rate
+      # If sustained, exhausts 30-day budget in ~2 hours
+      - alert: ServoHTTPAvailabilityFastBurn
+        expr: |
+          (
+            sum(rate(servo_http_requests_total{status_code=~"5.."}[5m]))
+            / sum(rate(servo_http_requests_total[5m]))
+          ) > (14.4 * 0.001)
+          and
+          (
+            sum(rate(servo_http_requests_total{status_code=~"5.."}[1h]))
+            / sum(rate(servo_http_requests_total[1h]))
+          ) > (14.4 * 0.001)
+        for: 2m
+        labels:
+          severity: critical
+          slo: http_availability
+          burn_rate: fast
+        annotations:
+          summary: "HTTP availability SLO fast burn rate exceeded"
+          description: >-
+            HTTP error rate is {{ printf "%.2f" $value | mul 100 }}% over the last 5 minutes.
+            At this rate, the 30-day error budget will be exhausted in ~2 hours.
+          runbook_url: "https://docs.servo.io/runbooks/http-availability"
+          dashboard_url: "https://grafana.servo.io/d/servo-slo-overview"
+
+      # Slow burn: 3x burn rate
+      # If sustained, exhausts 30-day budget in ~10 days
+      - alert: ServoHTTPAvailabilitySlowBurn
+        expr: |
+          (
+            sum(rate(servo_http_requests_total{status_code=~"5.."}[30m]))
+            / sum(rate(servo_http_requests_total[30m]))
+          ) > (3.0 * 0.001)
+          and
+          (
+            sum(rate(servo_http_requests_total{status_code=~"5.."}[6h]))
+            / sum(rate(servo_http_requests_total[6h]))
+          ) > (3.0 * 0.001)
+        for: 5m
+        labels:
+          severity: warning
+          slo: http_availability
+          burn_rate: slow
+        annotations:
+          summary: "HTTP availability SLO slow burn rate exceeded"
+          description: >-
+            HTTP error rate is elevated at {{ printf "%.2f" $value | mul 100 }}%.
+            This is consuming error budget faster than expected.
+          runbook_url: "https://docs.servo.io/runbooks/http-availability"
+
+  # ===========================================================================
+  # Workflow Availability SLO Alerts (Target: 99.9%)
+  # ===========================================================================
+  - name: servo.slo.workflow_availability
+    rules:
+      - alert: ServoWorkflowAvailabilityFastBurn
+        expr: |
+          (
+            1 - sum(rate(servo_workflow_executions_total{status="succeeded"}[5m]))
+                / sum(rate(servo_workflow_executions_total[5m]))
+          ) > (14.4 * 0.001)
+          and
+          (
+            1 - sum(rate(servo_workflow_executions_total{status="succeeded"}[1h]))
+                / sum(rate(servo_workflow_executions_total[1h]))
+          ) > (14.4 * 0.001)
+        for: 2m
+        labels:
+          severity: critical
+          slo: workflow_availability
+          burn_rate: fast
+        annotations:
+          summary: "Workflow availability SLO fast burn rate exceeded"
+          description: >-
+            Workflow failure rate is {{ printf "%.2f" $value | mul 100 }}%.
+            Immediate investigation required.
+          runbook_url: "https://docs.servo.io/runbooks/workflow-availability"
+          dashboard_url: "https://grafana.servo.io/d/servo-workflow-execution"
+
+      - alert: ServoWorkflowAvailabilitySlowBurn
+        expr: |
+          (
+            1 - sum(rate(servo_workflow_executions_total{status="succeeded"}[30m]))
+                / sum(rate(servo_workflow_executions_total[30m]))
+          ) > (3.0 * 0.001)
+          and
+          (
+            1 - sum(rate(servo_workflow_executions_total{status="succeeded"}[6h]))
+                / sum(rate(servo_workflow_executions_total[6h]))
+          ) > (3.0 * 0.001)
+        for: 5m
+        labels:
+          severity: warning
+          slo: workflow_availability
+          burn_rate: slow
+        annotations:
+          summary: "Workflow availability SLO slow burn rate exceeded"
+          description: >-
+            Workflow failure rate is elevated. Review failed executions.
+          runbook_url: "https://docs.servo.io/runbooks/workflow-availability"
+
+  # ===========================================================================
+  # HTTP Latency SLO Alerts (Target: 99% under 500ms)
+  # ===========================================================================
+  - name: servo.slo.http_latency
+    rules:
+      - alert: ServoHTTPLatencyFastBurn
+        expr: |
+          (
+            1 - sum(rate(servo_http_request_duration_seconds_bucket{le="0.5"}[5m]))
+                / sum(rate(servo_http_request_duration_seconds_count[5m]))
+          ) > (14.4 * 0.01)
+          and
+          (
+            1 - sum(rate(servo_http_request_duration_seconds_bucket{le="0.5"}[1h]))
+                / sum(rate(servo_http_request_duration_seconds_count[1h]))
+          ) > (14.4 * 0.01)
+        for: 2m
+        labels:
+          severity: critical
+          slo: http_latency
+          burn_rate: fast
+        annotations:
+          summary: "HTTP latency SLO fast burn rate exceeded"
+          description: >-
+            More than {{ printf "%.1f" $value | mul 100 }}% of requests exceeding 500ms threshold.
+            Check for database issues, upstream dependencies, or resource exhaustion.
+          runbook_url: "https://docs.servo.io/runbooks/high-latency"
+          dashboard_url: "https://grafana.servo.io/d/servo-infrastructure"
+
+      - alert: ServoHTTPLatencySlowBurn
+        expr: |
+          (
+            1 - sum(rate(servo_http_request_duration_seconds_bucket{le="0.5"}[30m]))
+                / sum(rate(servo_http_request_duration_seconds_count[30m]))
+          ) > (6.0 * 0.01)
+          and
+          (
+            1 - sum(rate(servo_http_request_duration_seconds_bucket{le="0.5"}[6h]))
+                / sum(rate(servo_http_request_duration_seconds_count[6h]))
+          ) > (6.0 * 0.01)
+        for: 5m
+        labels:
+          severity: warning
+          slo: http_latency
+          burn_rate: slow
+        annotations:
+          summary: "HTTP latency SLO slow burn rate exceeded"
+          description: >-
+            Latency is elevated. Investigate performance degradation.
+          runbook_url: "https://docs.servo.io/runbooks/high-latency"
+
+  # ===========================================================================
+  # Workflow Duration SLO Alerts (Target: 95% under 5 minutes)
+  # ===========================================================================
+  - name: servo.slo.workflow_duration
+    rules:
+      - alert: ServoWorkflowDurationFastBurn
+        expr: |
+          (
+            1 - sum(rate(servo_workflow_duration_seconds_bucket{le="300"}[5m]))
+                / sum(rate(servo_workflow_duration_seconds_count[5m]))
+          ) > (14.4 * 0.05)
+          and
+          (
+            1 - sum(rate(servo_workflow_duration_seconds_bucket{le="300"}[1h]))
+                / sum(rate(servo_workflow_duration_seconds_count[1h]))
+          ) > (14.4 * 0.05)
+        for: 2m
+        labels:
+          severity: critical
+          slo: workflow_duration
+          burn_rate: fast
+        annotations:
+          summary: "Workflow duration SLO fast burn rate exceeded"
+          description: >-
+            Too many workflows exceeding 5 minute threshold.
+            Check for stuck executions, resource contention, or external service issues.
+          runbook_url: "https://docs.servo.io/runbooks/slow-workflows"
+          dashboard_url: "https://grafana.servo.io/d/servo-workflow-execution"
+
+      - alert: ServoWorkflowDurationSlowBurn
+        expr: |
+          (
+            1 - sum(rate(servo_workflow_duration_seconds_bucket{le="300"}[1h]))
+                / sum(rate(servo_workflow_duration_seconds_count[1h]))
+          ) > (3.0 * 0.05)
+          and
+          (
+            1 - sum(rate(servo_workflow_duration_seconds_bucket{le="300"}[6h]))
+                / sum(rate(servo_workflow_duration_seconds_count[6h]))
+          ) > (3.0 * 0.05)
+        for: 10m
+        labels:
+          severity: warning
+          slo: workflow_duration
+          burn_rate: slow
+        annotations:
+          summary: "Workflow duration SLO slow burn rate exceeded"
+          description: >-
+            Workflow execution times are trending higher.
+          runbook_url: "https://docs.servo.io/runbooks/slow-workflows"
+
+  # ===========================================================================
+  # Data Quality Check Pass Rate SLO Alerts (Target: 95%)
+  # ===========================================================================
+  - name: servo.slo.data_quality
+    rules:
+      - alert: ServoDataQualityFastBurn
+        expr: |
+          (
+            1 - sum(rate(servo_check_executions_total{outcome="passed"}[5m]))
+                / sum(rate(servo_check_executions_total{outcome!="skipped"}[5m]))
+          ) > (10.0 * 0.05)
+          and
+          (
+            1 - sum(rate(servo_check_executions_total{outcome="passed"}[1h]))
+                / sum(rate(servo_check_executions_total{outcome!="skipped"}[1h]))
+          ) > (10.0 * 0.05)
+        for: 2m
+        labels:
+          severity: critical
+          slo: data_quality
+          burn_rate: fast
+        annotations:
+          summary: "Data quality SLO fast burn rate exceeded"
+          description: >-
+            Data quality check failure rate is {{ printf "%.1f" $value | mul 100 }}%.
+            Review failing checks and upstream data sources.
+          runbook_url: "https://docs.servo.io/runbooks/data-quality-failures"
+          dashboard_url: "https://grafana.servo.io/d/servo-data-quality"
+
+      - alert: ServoDataQualitySlowBurn
+        expr: |
+          (
+            1 - sum(rate(servo_check_executions_total{outcome="passed"}[1h]))
+                / sum(rate(servo_check_executions_total{outcome!="skipped"}[1h]))
+          ) > (2.0 * 0.05)
+          and
+          (
+            1 - sum(rate(servo_check_executions_total{outcome="passed"}[6h]))
+                / sum(rate(servo_check_executions_total{outcome!="skipped"}[6h]))
+          ) > (2.0 * 0.05)
+        for: 10m
+        labels:
+          severity: warning
+          slo: data_quality
+          burn_rate: slow
+        annotations:
+          summary: "Data quality SLO slow burn rate exceeded"
+          description: >-
+            Data quality check pass rate is trending down.
+          runbook_url: "https://docs.servo.io/runbooks/data-quality-failures"
+
+  # ===========================================================================
+  # Database Latency SLO Alerts (Target: 99% under 100ms)
+  # ===========================================================================
+  - name: servo.slo.database_latency
+    rules:
+      - alert: ServoDatabaseLatencyFastBurn
+        expr: |
+          (
+            1 - sum(rate(servo_db_operation_duration_seconds_bucket{le="0.1"}[5m]))
+                / sum(rate(servo_db_operation_duration_seconds_count[5m]))
+          ) > (14.4 * 0.01)
+          and
+          (
+            1 - sum(rate(servo_db_operation_duration_seconds_bucket{le="0.1"}[1h]))
+                / sum(rate(servo_db_operation_duration_seconds_count[1h]))
+          ) > (14.4 * 0.01)
+        for: 2m
+        labels:
+          severity: critical
+          slo: database_latency
+          burn_rate: fast
+        annotations:
+          summary: "Database latency SLO fast burn rate exceeded"
+          description: >-
+            Database operations exceeding 100ms threshold.
+            Check connection pool, query performance, and database health.
+          runbook_url: "https://docs.servo.io/runbooks/database-slow"
+          dashboard_url: "https://grafana.servo.io/d/servo-infrastructure"
+
+      - alert: ServoDatabaseLatencySlowBurn
+        expr: |
+          (
+            1 - sum(rate(servo_db_operation_duration_seconds_bucket{le="0.1"}[30m]))
+                / sum(rate(servo_db_operation_duration_seconds_count[30m]))
+          ) > (6.0 * 0.01)
+          and
+          (
+            1 - sum(rate(servo_db_operation_duration_seconds_bucket{le="0.1"}[6h]))
+                / sum(rate(servo_db_operation_duration_seconds_count[6h]))
+          ) > (6.0 * 0.01)
+        for: 5m
+        labels:
+          severity: warning
+          slo: database_latency
+          burn_rate: slow
+        annotations:
+          summary: "Database latency SLO slow burn rate exceeded"
+          description: >-
+            Database operation latency is elevated.
+          runbook_url: "https://docs.servo.io/runbooks/database-slow"
+
+  # ===========================================================================
+  # Rate Limit Acceptance SLO Alerts (Target: 99.5% accepted)
+  # ===========================================================================
+  - name: servo.slo.rate_limiting
+    rules:
+      - alert: ServoRateLimitingFastBurn
+        expr: |
+          (
+            sum(rate(servo_rate_limit_rejections_total[5m]))
+            / sum(rate(servo_http_requests_total[5m]))
+          ) > (14.4 * 0.005)
+          and
+          (
+            sum(rate(servo_rate_limit_rejections_total[1h]))
+            / sum(rate(servo_http_requests_total[1h]))
+          ) > (14.4 * 0.005)
+        for: 2m
+        labels:
+          severity: critical
+          slo: rate_limiting
+          burn_rate: fast
+        annotations:
+          summary: "Rate limiting SLO fast burn rate exceeded"
+          description: >-
+            Rate limit rejection rate is {{ printf "%.2f" $value | mul 100 }}%.
+            Check for traffic spikes, misconfigured limits, or abuse.
+          runbook_url: "https://docs.servo.io/runbooks/rate-limit-rejections"
+          dashboard_url: "https://grafana.servo.io/d/servo-infrastructure"
+
+      - alert: ServoRateLimitingSlowBurn
+        expr: |
+          (
+            sum(rate(servo_rate_limit_rejections_total[30m]))
+            / sum(rate(servo_http_requests_total[30m]))
+          ) > (3.0 * 0.005)
+          and
+          (
+            sum(rate(servo_rate_limit_rejections_total[6h]))
+            / sum(rate(servo_http_requests_total[6h]))
+          ) > (3.0 * 0.005)
+        for: 5m
+        labels:
+          severity: warning
+          slo: rate_limiting
+          burn_rate: slow
+        annotations:
+          summary: "Rate limiting SLO slow burn rate exceeded"
+          description: >-
+            Rate limit rejections are elevated.
+          runbook_url: "https://docs.servo.io/runbooks/rate-limit-rejections"
+
+  # ===========================================================================
+  # Error Budget Status Recording Rules
+  # These recording rules pre-compute error budget remaining for dashboards
+  # ===========================================================================
+  - name: servo.slo.error_budget
+    interval: 1m
+    rules:
+      # HTTP Availability error budget remaining (30-day window)
+      - record: servo:slo:http_availability:error_budget_remaining
+        expr: |
+          1 - (
+            (
+              sum(increase(servo_http_requests_total{status_code=~"5.."}[30d]))
+              / sum(increase(servo_http_requests_total[30d]))
+            ) / 0.001
+          )
+
+      # Workflow Availability error budget remaining
+      - record: servo:slo:workflow_availability:error_budget_remaining
+        expr: |
+          1 - (
+            (
+              1 - sum(increase(servo_workflow_executions_total{status="succeeded"}[30d]))
+                  / sum(increase(servo_workflow_executions_total[30d]))
+            ) / 0.001
+          )
+
+      # HTTP Latency error budget remaining
+      - record: servo:slo:http_latency:error_budget_remaining
+        expr: |
+          1 - (
+            (
+              1 - sum(increase(servo_http_request_duration_seconds_bucket{le="0.5"}[30d]))
+                  / sum(increase(servo_http_request_duration_seconds_count[30d]))
+            ) / 0.01
+          )
+
+      # Data Quality error budget remaining (7-day window)
+      - record: servo:slo:data_quality:error_budget_remaining
+        expr: |
+          1 - (
+            (
+              1 - sum(increase(servo_check_executions_total{outcome="passed"}[7d]))
+                  / sum(increase(servo_check_executions_total{outcome!="skipped"}[7d]))
+            ) / 0.05
+          )
+
+      # Current burn rates (for dashboard visualization)
+      - record: servo:slo:http_availability:burn_rate_1h
+        expr: |
+          (
+            sum(rate(servo_http_requests_total{status_code=~"5.."}[1h]))
+            / sum(rate(servo_http_requests_total[1h]))
+          ) / 0.001
+
+      - record: servo:slo:workflow_availability:burn_rate_1h
+        expr: |
+          (
+            1 - sum(rate(servo_workflow_executions_total{status="succeeded"}[1h]))
+                / sum(rate(servo_workflow_executions_total[1h]))
+          ) / 0.001
+
+      - record: servo:slo:http_latency:burn_rate_1h
+        expr: |
+          (
+            1 - sum(rate(servo_http_request_duration_seconds_bucket{le="0.5"}[1h]))
+                / sum(rate(servo_http_request_duration_seconds_count[1h]))
+          ) / 0.01

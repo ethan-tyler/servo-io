@@ -1,0 +1,113 @@
+# Docker Compose configuration for local development
+#
+# This file provides local observability infrastructure for development:
+# - Jaeger for distributed tracing
+# - PostgreSQL for database
+#
+# Usage:
+#   docker-compose -f docker-compose.dev.yml up -d
+#
+# Environment Variables:
+#   SERVO_TRACE_EXPORTER=jaeger
+#   SERVO_JAEGER_ENDPOINT=http://localhost:4317
+#   SERVO_TRACE_ENABLED=true
+#   SERVO_ENVIRONMENT=development
+
+version: '3.8'
+
+services:
+  # =============================================================================
+  # Jaeger - Distributed Tracing
+  # =============================================================================
+  jaeger:
+    image: jaegertracing/all-in-one:1.52
+    container_name: servo-jaeger
+    ports:
+      # Jaeger UI
+      - "16686:16686"
+      # OTLP gRPC (used by servo-worker)
+      - "4317:4317"
+      # OTLP HTTP
+      - "4318:4318"
+      # Jaeger thrift (legacy)
+      - "6831:6831/udp"
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+      - LOG_LEVEL=debug
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:16686"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # =============================================================================
+  # PostgreSQL - Database
+  # =============================================================================
+  postgres:
+    image: postgres:15-alpine
+    container_name: servo-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: servo_app
+      POSTGRES_PASSWORD: servo_app
+      POSTGRES_DB: servo_dev
+    volumes:
+      - servo-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U servo_app -d servo_dev"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # =============================================================================
+  # Prometheus - Metrics Collection (optional)
+  # =============================================================================
+  prometheus:
+    image: prom/prometheus:v2.48.0
+    container_name: servo-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./deploy/prometheus.dev.yml:/etc/prometheus/prometheus.yml:ro
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=7d'
+      - '--web.enable-lifecycle'
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:9090/-/healthy"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    profiles:
+      - metrics  # Only start with: docker-compose --profile metrics up
+
+  # =============================================================================
+  # Grafana - Dashboards (optional)
+  # =============================================================================
+  grafana:
+    image: grafana/grafana:10.2.2
+    container_name: servo-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - ./deploy/dashboards:/var/lib/grafana/dashboards:ro
+      - ./deploy/grafana/provisioning:/etc/grafana/provisioning:ro
+      - servo-grafana-data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    profiles:
+      - metrics  # Only start with: docker-compose --profile metrics up
+
+volumes:
+  servo-postgres-data:
+  servo-grafana-data:
+
+networks:
+  default:
+    name: servo-dev
