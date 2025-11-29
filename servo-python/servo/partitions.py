@@ -3,6 +3,12 @@
 This module provides Dagster-compatible partition definitions for time-based,
 static, dynamic, and multi-dimensional partitioning.
 
+.. note::
+    **SDK-Only Feature**: Partitioning is currently available for asset definition
+    and metadata purposes only. Full runtime/scheduler support for partition-aware
+    execution is planned for a future release. Currently, partition definitions are
+    serialized and stored but not yet used for automated partition scheduling.
+
 Example usage:
 
     from servo.partitions import DailyPartition, StaticPartition, MultiPartition
