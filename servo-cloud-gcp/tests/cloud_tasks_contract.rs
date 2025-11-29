@@ -371,7 +371,7 @@ mod error_handling_contract {
     fn server_error_range() {
         // 5xx errors should trigger retry
         for status in 500..=599 {
-            assert!(status >= 500 && status < 600);
+            assert!((500..600).contains(&status));
         }
     }
 
@@ -379,7 +379,7 @@ mod error_handling_contract {
     fn client_error_range() {
         // 4xx errors (except 429) should not retry
         for status in [400u16, 401, 403, 404] {
-            assert!(status >= 400 && status < 500);
+            assert!((400..500).contains(&status));
             assert_ne!(status, 429); // 429 is special case
         }
     }

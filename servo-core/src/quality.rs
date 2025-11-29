@@ -146,7 +146,7 @@ impl CheckType {
 }
 
 /// Severity level for check failures
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum CheckSeverity {
     /// Informational - logged but doesn't affect workflow
@@ -156,6 +156,7 @@ pub enum CheckSeverity {
     Warning,
 
     /// Error - blocks downstream execution if blocking=true
+    #[default]
     Error,
 }
 
@@ -163,12 +164,6 @@ impl CheckSeverity {
     /// Returns true if this severity level can block workflow execution
     pub fn can_block(&self) -> bool {
         matches!(self, CheckSeverity::Error)
-    }
-}
-
-impl Default for CheckSeverity {
-    fn default() -> Self {
-        CheckSeverity::Error
     }
 }
 

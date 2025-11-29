@@ -385,7 +385,7 @@ mod error_response_contract {
     fn rate_limit_includes_retry_after_header() {
         // Contract: 429 responses should include Retry-After header
         let expected_header = "Retry-After";
-        assert!(!expected_header.is_empty());
+        assert_eq!(expected_header, "Retry-After");
     }
 
     #[test]
