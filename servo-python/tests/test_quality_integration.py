@@ -279,6 +279,7 @@ class TestDeployChecks:
             parameters={"columns": ["email"]},
         )
         from servo.quality import _register_check
+
         _register_check(defn)
 
         mock_client = Mock()
@@ -309,9 +310,11 @@ class TestDeployChecks:
             parameters={"columns": ["id"]},
         )
         from servo.quality import _register_check
+
         _register_check(defn)
 
         from servo.exceptions import ServoAPIError
+
         mock_client = Mock()
         mock_client.get_asset.side_effect = ServoAPIError(
             "Asset not found", status_code=404, response_body={}
@@ -336,9 +339,11 @@ class TestDeployChecks:
             parameters={"columns": ["id"]},
         )
         from servo.quality import _register_check
+
         _register_check(defn)
 
         from servo.exceptions import ServoAPIError
+
         mock_client = Mock()
         mock_client.get_asset.return_value = {"id": "asset-123"}
         mock_client.create_check.side_effect = ServoAPIError(

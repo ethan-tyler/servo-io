@@ -77,7 +77,9 @@ class MockColumn:
 
     def between(self, min_val, max_val):
         """Return range mask."""
-        return MockBooleanSeries([min_val <= v <= max_val if v is not None else False for v in self._values])
+        return MockBooleanSeries(
+            [min_val <= v <= max_val if v is not None else False for v in self._values]
+        )
 
     @property
     def str(self):

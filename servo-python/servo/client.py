@@ -470,9 +470,7 @@ class ServoClient:
         Returns:
             List of check results for the execution
         """
-        response = self._request(
-            "GET", f"/api/v1/executions/{execution_id}/check-results"
-        )
+        response = self._request("GET", f"/api/v1/executions/{execution_id}/check-results")
         results: list[dict[str, Any]] = response.get("results", [])
         return results
 
@@ -666,8 +664,6 @@ class AsyncServoClient:
         execution_id: str,
     ) -> list[dict[str, Any]]:
         """Get check results for an execution."""
-        response = await self._request(
-            "GET", f"/api/v1/executions/{execution_id}/check-results"
-        )
+        response = await self._request("GET", f"/api/v1/executions/{execution_id}/check-results")
         results: list[dict[str, Any]] = response.get("results", [])
         return results

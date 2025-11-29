@@ -98,7 +98,9 @@ def get_checks_for_asset(asset_name: str) -> list[CheckDefinition]:
     return [_check_registry[name] for name in check_names if name in _check_registry]
 
 
-def _register_check(definition: CheckDefinition, callable_instance: AssetCheck | _InlineCheckCallable | None = None) -> None:
+def _register_check(
+    definition: CheckDefinition, callable_instance: AssetCheck | _InlineCheckCallable | None = None
+) -> None:
     """Register a check in the global registry."""
     if definition.name in _check_registry:
         raise ServoValidationError(
@@ -823,9 +825,12 @@ class check:
 
             # Create the check callable
             def _check_impl(data: Any) -> CheckResult:
-                return expect(data, asset_name=asset_name, severity=severity, blocking=blocking).column(
-                    column
-                ).not_null().run()[0]
+                return (
+                    expect(data, asset_name=asset_name, severity=severity, blocking=blocking)
+                    .column(column)
+                    .not_null()
+                    .run()[0]
+                )
 
             # Wrap with timing/error handling (doesn't auto-register)
             check_callable = _InlineCheckCallable(
@@ -878,9 +883,12 @@ class check:
             )
 
             def _check_impl(data: Any) -> CheckResult:
-                return expect(data, asset_name=asset_name, severity=severity, blocking=blocking).column(
-                    column
-                ).unique().run()[0]
+                return (
+                    expect(data, asset_name=asset_name, severity=severity, blocking=blocking)
+                    .column(column)
+                    .unique()
+                    .run()[0]
+                )
 
             check_callable = _InlineCheckCallable(
                 _check_impl,
