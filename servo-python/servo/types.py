@@ -187,10 +187,12 @@ class AssetDefinition:
     metadata: AssetMetadata
     group: str | None = None
     is_source: bool = False
+    partition: Any | None = None  # PartitionDefinition (avoid circular import)
+    partition_mappings: dict[str, Any] | None = None  # {dep_name: PartitionMapping}
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for API serialization."""
-        return {
+        result = {
             "name": self.name,
             "function_name": self.function_name,
             "module": self.module,
@@ -200,6 +202,14 @@ class AssetDefinition:
             "group": self.group,
             "is_source": self.is_source,
         }
+        if self.partition is not None:
+            result["partition"] = self.partition.to_dict()
+        if self.partition_mappings is not None:
+            result["partition_mappings"] = {
+                name: mapping.to_dict()
+                for name, mapping in self.partition_mappings.items()
+            }
+        return result
 
 
 @dataclass
