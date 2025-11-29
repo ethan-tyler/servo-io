@@ -1345,6 +1345,511 @@ impl PostgresStorage {
             .map(|_| ())
             .map_err(map_db_error)
     }
+
+    // ========== Data Quality Check Operations ==========
+
+    /// Validate check severity
+    fn validate_check_severity(severity: &str) -> Result<()> {
+        match severity {
+            "info" | "warning" | "error" => Ok(()),
+            _ => Err(crate::Error::ValidationError(format!(
+                "Invalid check severity: {}",
+                severity
+            ))),
+        }
+    }
+
+    /// Validate check outcome
+    fn validate_check_outcome(outcome: &str) -> Result<()> {
+        match outcome {
+            "passed" | "failed" | "skipped" | "error" => Ok(()),
+            _ => Err(crate::Error::ValidationError(format!(
+                "Invalid check outcome: {}",
+                outcome
+            ))),
+        }
+    }
+
+    /// Create a new asset check
+    #[instrument(
+        skip(self, check, tenant_id),
+        fields(
+            db.system = "postgresql",
+            db.operation = "INSERT",
+            db.sql.table = "asset_checks",
+            tenant_id = %tenant_id.as_str(),
+            check_id = %check.id
+        )
+    )]
+    pub async fn create_asset_check(
+        &self,
+        check: &AssetCheckModel,
+        tenant_id: &TenantId,
+    ) -> Result<()> {
+        Self::validate_non_empty_string(&check.name, "Check name")?;
+        Self::validate_check_severity(&check.severity)?;
+
+        let check = check.clone();
+        let tenant_str = tenant_id.as_str().to_string();
+
+        self.with_tenant_context(tenant_id, |tx| {
+            Box::pin(async move {
+                sqlx::query(
+                    r#"
+                    INSERT INTO asset_checks (
+                        id, name, description, asset_id, check_type, severity,
+                        blocking, enabled, tags, owner, tenant_id, created_at, updated_at
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+                    "#,
+                )
+                .bind(check.id)
+                .bind(&check.name)
+                .bind(&check.description)
+                .bind(check.asset_id)
+                .bind(&check.check_type)
+                .bind(&check.severity)
+                .bind(check.blocking)
+                .bind(check.enabled)
+                .bind(&check.tags)
+                .bind(&check.owner)
+                .bind(&tenant_str)
+                .bind(check.created_at)
+                .bind(check.updated_at)
+                .execute(&mut **tx)
+                .await
+                .map_err(map_db_error)?;
+
+                Ok(())
+            })
+        })
+        .await
+    }
+
+    /// Get an asset check by ID
+    #[instrument(
+        skip(self, tenant_id),
+        fields(
+            db.system = "postgresql",
+            db.operation = "SELECT",
+            db.sql.table = "asset_checks",
+            tenant_id = %tenant_id.as_str(),
+            check_id = %id
+        )
+    )]
+    pub async fn get_asset_check(&self, id: Uuid, tenant_id: &TenantId) -> Result<AssetCheckModel> {
+        self.with_tenant_context(tenant_id, |tx| {
+            Box::pin(async move {
+                let check = sqlx::query_as::<_, AssetCheckModel>(
+                    r#"
+                    SELECT id, name, description, asset_id, check_type, severity,
+                           blocking, enabled, tags, owner, tenant_id, created_at, updated_at
+                    FROM asset_checks
+                    WHERE id = $1
+                    "#,
+                )
+                .bind(id)
+                .fetch_optional(&mut **tx)
+                .await
+                .map_err(map_db_error)?
+                .ok_or_else(|| crate::Error::NotFound(format!("Asset check {}", id)))?;
+
+                Ok(check)
+            })
+        })
+        .await
+    }
+
+    /// List asset checks for a specific asset
+    #[instrument(
+        skip(self, tenant_id),
+        fields(
+            db.system = "postgresql",
+            db.operation = "SELECT",
+            db.sql.table = "asset_checks",
+            tenant_id = %tenant_id.as_str(),
+            asset_id = %asset_id
+        )
+    )]
+    pub async fn list_asset_checks(
+        &self,
+        asset_id: Uuid,
+        tenant_id: &TenantId,
+        enabled_only: bool,
+    ) -> Result<Vec<AssetCheckModel>> {
+        self.with_tenant_context(tenant_id, |tx| {
+            Box::pin(async move {
+                let checks = if enabled_only {
+                    sqlx::query_as::<_, AssetCheckModel>(
+                        r#"
+                        SELECT id, name, description, asset_id, check_type, severity,
+                               blocking, enabled, tags, owner, tenant_id, created_at, updated_at
+                        FROM asset_checks
+                        WHERE asset_id = $1 AND enabled = true
+                        ORDER BY created_at ASC
+                        "#,
+                    )
+                    .bind(asset_id)
+                    .fetch_all(&mut **tx)
+                    .await
+                    .map_err(map_db_error)?
+                } else {
+                    sqlx::query_as::<_, AssetCheckModel>(
+                        r#"
+                        SELECT id, name, description, asset_id, check_type, severity,
+                               blocking, enabled, tags, owner, tenant_id, created_at, updated_at
+                        FROM asset_checks
+                        WHERE asset_id = $1
+                        ORDER BY created_at ASC
+                        "#,
+                    )
+                    .bind(asset_id)
+                    .fetch_all(&mut **tx)
+                    .await
+                    .map_err(map_db_error)?
+                };
+
+                Ok(checks)
+            })
+        })
+        .await
+    }
+
+    /// Update an asset check
+    #[instrument(
+        skip(self, check, tenant_id),
+        fields(
+            db.system = "postgresql",
+            db.operation = "UPDATE",
+            db.sql.table = "asset_checks",
+            tenant_id = %tenant_id.as_str(),
+            check_id = %check.id
+        )
+    )]
+    pub async fn update_asset_check(
+        &self,
+        check: &AssetCheckModel,
+        tenant_id: &TenantId,
+    ) -> Result<()> {
+        Self::validate_non_empty_string(&check.name, "Check name")?;
+        Self::validate_check_severity(&check.severity)?;
+
+        let check = check.clone();
+
+        self.with_tenant_context(tenant_id, |tx| {
+            Box::pin(async move {
+                let result = sqlx::query(
+                    r#"
+                    UPDATE asset_checks
+                    SET name = $1, description = $2, check_type = $3, severity = $4,
+                        blocking = $5, enabled = $6, tags = $7, owner = $8, updated_at = $9
+                    WHERE id = $10
+                    "#,
+                )
+                .bind(&check.name)
+                .bind(&check.description)
+                .bind(&check.check_type)
+                .bind(&check.severity)
+                .bind(check.blocking)
+                .bind(check.enabled)
+                .bind(&check.tags)
+                .bind(&check.owner)
+                .bind(check.updated_at)
+                .bind(check.id)
+                .execute(&mut **tx)
+                .await
+                .map_err(map_db_error)?;
+
+                if result.rows_affected() == 0 {
+                    return Err(crate::Error::NotFound(format!("Asset check {}", check.id)));
+                }
+
+                Ok(())
+            })
+        })
+        .await
+    }
+
+    /// Delete an asset check
+    #[instrument(
+        skip(self, tenant_id),
+        fields(
+            db.system = "postgresql",
+            db.operation = "DELETE",
+            db.sql.table = "asset_checks",
+            tenant_id = %tenant_id.as_str(),
+            check_id = %id
+        )
+    )]
+    pub async fn delete_asset_check(&self, id: Uuid, tenant_id: &TenantId) -> Result<()> {
+        self.with_tenant_context(tenant_id, |tx| {
+            Box::pin(async move {
+                let result = sqlx::query("DELETE FROM asset_checks WHERE id = $1")
+                    .bind(id)
+                    .execute(&mut **tx)
+                    .await
+                    .map_err(map_db_error)?;
+
+                if result.rows_affected() == 0 {
+                    return Err(crate::Error::NotFound(format!("Asset check {}", id)));
+                }
+
+                Ok(())
+            })
+        })
+        .await
+    }
+
+    /// Create a check result
+    #[instrument(
+        skip(self, result, tenant_id),
+        fields(
+            db.system = "postgresql",
+            db.operation = "INSERT",
+            db.sql.table = "check_results",
+            tenant_id = %tenant_id.as_str(),
+            result_id = %result.id
+        )
+    )]
+    pub async fn create_check_result(
+        &self,
+        result: &CheckResultModel,
+        tenant_id: &TenantId,
+    ) -> Result<()> {
+        Self::validate_check_outcome(&result.outcome)?;
+        Self::validate_check_severity(&result.severity)?;
+
+        let result = result.clone();
+        let tenant_str = tenant_id.as_str().to_string();
+
+        self.with_tenant_context(tenant_id, |tx| {
+            Box::pin(async move {
+                sqlx::query(
+                    r#"
+                    INSERT INTO check_results (
+                        id, check_id, execution_id, asset_id, outcome, severity, blocking,
+                        failed_row_count, total_row_count, error_message, failed_samples,
+                        duration_ms, executed_at, metadata, tenant_id
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+                    "#,
+                )
+                .bind(result.id)
+                .bind(result.check_id)
+                .bind(result.execution_id)
+                .bind(result.asset_id)
+                .bind(&result.outcome)
+                .bind(&result.severity)
+                .bind(result.blocking)
+                .bind(result.failed_row_count)
+                .bind(result.total_row_count)
+                .bind(&result.error_message)
+                .bind(&result.failed_samples)
+                .bind(result.duration_ms)
+                .bind(result.executed_at)
+                .bind(&result.metadata)
+                .bind(&tenant_str)
+                .execute(&mut **tx)
+                .await
+                .map_err(map_db_error)?;
+
+                Ok(())
+            })
+        })
+        .await
+    }
+
+    /// Create multiple check results in a batch
+    #[instrument(
+        skip(self, results, tenant_id),
+        fields(
+            db.system = "postgresql",
+            db.operation = "INSERT",
+            db.sql.table = "check_results",
+            tenant_id = %tenant_id.as_str(),
+            batch_size = results.len()
+        )
+    )]
+    pub async fn create_check_results_batch(
+        &self,
+        results: &[CheckResultModel],
+        tenant_id: &TenantId,
+    ) -> Result<()> {
+        if results.is_empty() {
+            return Ok(());
+        }
+
+        // Validate all results
+        for result in results {
+            Self::validate_check_outcome(&result.outcome)?;
+            Self::validate_check_severity(&result.severity)?;
+        }
+
+        let results = results.to_vec();
+        let tenant_str = tenant_id.as_str().to_string();
+
+        self.with_tenant_context(tenant_id, |tx| {
+            Box::pin(async move {
+                for result in results {
+                    sqlx::query(
+                        r#"
+                        INSERT INTO check_results (
+                            id, check_id, execution_id, asset_id, outcome, severity, blocking,
+                            failed_row_count, total_row_count, error_message, failed_samples,
+                            duration_ms, executed_at, metadata, tenant_id
+                        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+                        "#,
+                    )
+                    .bind(result.id)
+                    .bind(result.check_id)
+                    .bind(result.execution_id)
+                    .bind(result.asset_id)
+                    .bind(&result.outcome)
+                    .bind(&result.severity)
+                    .bind(result.blocking)
+                    .bind(result.failed_row_count)
+                    .bind(result.total_row_count)
+                    .bind(&result.error_message)
+                    .bind(&result.failed_samples)
+                    .bind(result.duration_ms)
+                    .bind(result.executed_at)
+                    .bind(&result.metadata)
+                    .bind(&tenant_str)
+                    .execute(&mut **tx)
+                    .await
+                    .map_err(map_db_error)?;
+                }
+
+                Ok(())
+            })
+        })
+        .await
+    }
+
+    /// List check results for an execution
+    #[instrument(
+        skip(self, tenant_id),
+        fields(
+            db.system = "postgresql",
+            db.operation = "SELECT",
+            db.sql.table = "check_results",
+            tenant_id = %tenant_id.as_str(),
+            execution_id = %execution_id
+        )
+    )]
+    pub async fn list_check_results_for_execution(
+        &self,
+        execution_id: Uuid,
+        tenant_id: &TenantId,
+    ) -> Result<Vec<CheckResultModel>> {
+        self.with_tenant_context(tenant_id, |tx| {
+            Box::pin(async move {
+                let results = sqlx::query_as::<_, CheckResultModel>(
+                    r#"
+                    SELECT id, check_id, execution_id, asset_id, outcome, severity, blocking,
+                           failed_row_count, total_row_count, error_message, failed_samples,
+                           duration_ms, executed_at, metadata, tenant_id
+                    FROM check_results
+                    WHERE execution_id = $1
+                    ORDER BY executed_at ASC
+                    "#,
+                )
+                .bind(execution_id)
+                .fetch_all(&mut **tx)
+                .await
+                .map_err(map_db_error)?;
+
+                Ok(results)
+            })
+        })
+        .await
+    }
+
+    /// Get blocking check failures for an execution
+    ///
+    /// Returns check results that are blocking, failed, and have error severity
+    #[instrument(
+        skip(self, tenant_id),
+        fields(
+            db.system = "postgresql",
+            db.operation = "SELECT",
+            db.sql.table = "check_results",
+            tenant_id = %tenant_id.as_str(),
+            execution_id = %execution_id
+        )
+    )]
+    pub async fn get_blocking_check_failures(
+        &self,
+        execution_id: Uuid,
+        tenant_id: &TenantId,
+    ) -> Result<Vec<CheckResultModel>> {
+        self.with_tenant_context(tenant_id, |tx| {
+            Box::pin(async move {
+                let results = sqlx::query_as::<_, CheckResultModel>(
+                    r#"
+                    SELECT id, check_id, execution_id, asset_id, outcome, severity, blocking,
+                           failed_row_count, total_row_count, error_message, failed_samples,
+                           duration_ms, executed_at, metadata, tenant_id
+                    FROM check_results
+                    WHERE execution_id = $1
+                      AND blocking = true
+                      AND outcome IN ('failed', 'error')
+                      AND severity = 'error'
+                    ORDER BY executed_at ASC
+                    "#,
+                )
+                .bind(execution_id)
+                .fetch_all(&mut **tx)
+                .await
+                .map_err(map_db_error)?;
+
+                Ok(results)
+            })
+        })
+        .await
+    }
+
+    /// List recent check results for an asset
+    #[instrument(
+        skip(self, tenant_id),
+        fields(
+            db.system = "postgresql",
+            db.operation = "SELECT",
+            db.sql.table = "check_results",
+            tenant_id = %tenant_id.as_str(),
+            asset_id = %asset_id
+        )
+    )]
+    pub async fn list_recent_check_results_for_asset(
+        &self,
+        asset_id: Uuid,
+        tenant_id: &TenantId,
+        limit: i64,
+    ) -> Result<Vec<CheckResultModel>> {
+        Self::validate_pagination_params(limit, 0)?;
+
+        self.with_tenant_context(tenant_id, |tx| {
+            Box::pin(async move {
+                let results = sqlx::query_as::<_, CheckResultModel>(
+                    r#"
+                    SELECT id, check_id, execution_id, asset_id, outcome, severity, blocking,
+                           failed_row_count, total_row_count, error_message, failed_samples,
+                           duration_ms, executed_at, metadata, tenant_id
+                    FROM check_results
+                    WHERE asset_id = $1
+                    ORDER BY executed_at DESC
+                    LIMIT $2
+                    "#,
+                )
+                .bind(asset_id)
+                .bind(limit)
+                .fetch_all(&mut **tx)
+                .await
+                .map_err(map_db_error)?;
+
+                Ok(results)
+            })
+        })
+        .await
+    }
 }
 
 fn map_db_error(err: sqlx::Error) -> crate::Error {

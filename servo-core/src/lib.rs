@@ -5,6 +5,7 @@
 
 pub mod asset;
 pub mod compiler;
+pub mod quality;
 pub mod registry;
 pub mod scheduler;
 pub mod workflow;
@@ -15,6 +16,10 @@ pub use asset::{
     PartitionType, TimeGranularity,
 };
 pub use compiler::{CompileError, ExecutionPlan, WorkflowCompiler};
+pub use quality::{
+    AssetCheck, AssetCheckBuilder, CheckExecutionSummary, CheckId, CheckOutcome, CheckResult,
+    CheckSeverity, CheckType,
+};
 pub use registry::{AssetRegistry, RegistryError};
 pub use scheduler::{Schedule, ScheduleError, Scheduler};
 pub use workflow::{Workflow, WorkflowId, WorkflowMetadata};

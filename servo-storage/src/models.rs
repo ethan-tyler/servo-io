@@ -57,3 +57,41 @@ pub struct AssetDependencyModel {
     pub dependency_type: String,
     pub created_at: DateTime<Utc>,
 }
+
+/// Asset check model for data quality checks
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct AssetCheckModel {
+    pub id: Uuid,
+    pub name: String,
+    pub description: Option<String>,
+    pub asset_id: Uuid,
+    pub check_type: sqlx::types::Json<serde_json::Value>,
+    pub severity: String,
+    pub blocking: bool,
+    pub enabled: bool,
+    pub tags: sqlx::types::Json<Vec<String>>,
+    pub owner: Option<String>,
+    pub tenant_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Check result model for storing check execution outcomes
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct CheckResultModel {
+    pub id: Uuid,
+    pub check_id: Uuid,
+    pub execution_id: Uuid,
+    pub asset_id: Uuid,
+    pub outcome: String,
+    pub severity: String,
+    pub blocking: bool,
+    pub failed_row_count: Option<i64>,
+    pub total_row_count: Option<i64>,
+    pub error_message: Option<String>,
+    pub failed_samples: Option<sqlx::types::Json<serde_json::Value>>,
+    pub duration_ms: i64,
+    pub executed_at: DateTime<Utc>,
+    pub metadata: Option<sqlx::types::Json<serde_json::Value>>,
+    pub tenant_id: Option<String>,
+}

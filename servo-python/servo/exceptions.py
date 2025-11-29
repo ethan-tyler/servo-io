@@ -114,3 +114,48 @@ class AssetExecutionError(ServoError):
         super().__init__(message, details)
         self.asset_name = asset_name
         self.original_error = original_error
+
+
+class CheckExecutionError(ServoError):
+    """Error during check execution."""
+
+    def __init__(
+        self,
+        message: str,
+        check_name: str,
+        asset_name: str,
+        original_error: Exception | None = None,
+    ) -> None:
+        details: dict[str, Any] = {
+            "check_name": check_name,
+            "asset_name": asset_name,
+        }
+        if original_error is not None:
+            details["original_error"] = str(original_error)
+            details["error_type"] = type(original_error).__name__
+        super().__init__(message, details)
+        self.check_name = check_name
+        self.asset_name = asset_name
+        self.original_error = original_error
+
+
+class BlockingCheckError(ServoError):
+    """Error raised when a blocking check fails."""
+
+    def __init__(
+        self,
+        message: str,
+        check_name: str,
+        asset_name: str,
+        failed_results: list | None = None,
+    ) -> None:
+        details: dict[str, Any] = {
+            "check_name": check_name,
+            "asset_name": asset_name,
+        }
+        if failed_results:
+            details["failed_count"] = len(failed_results)
+        super().__init__(message, details)
+        self.check_name = check_name
+        self.asset_name = asset_name
+        self.failed_results = failed_results or []

@@ -14,7 +14,7 @@ from servo.exceptions import (
     ServoConnectionError,
     ServoTimeoutError,
 )
-from servo.types import AssetStatus, Materialization, MaterializationTrigger
+from servo.types import AssetStatus, CheckDefinition, Materialization, MaterializationTrigger
 
 
 class ServoClient:
@@ -348,6 +348,134 @@ class ServoClient:
         """Check API health."""
         return self._request("GET", "/api/v1/health")
 
+    # ========== Check Operations ==========
+
+    def create_check(
+        self,
+        asset_id: str,
+        check: CheckDefinition,
+    ) -> dict[str, Any]:
+        """Create a check for an asset in the backend.
+
+        Args:
+            asset_id: UUID of the asset to attach the check to
+            check: CheckDefinition with check configuration
+
+        Returns:
+            Created check details including ID
+        """
+        payload = check.to_api_payload()
+        payload["asset_id"] = asset_id
+        return self._request("POST", "/api/v1/checks", json=payload)
+
+    def list_checks(
+        self,
+        asset_id: str | None = None,
+        enabled_only: bool = True,
+    ) -> list[dict[str, Any]]:
+        """List checks, optionally filtered by asset.
+
+        Args:
+            asset_id: Optional asset ID to filter checks
+            enabled_only: If True, only return enabled checks
+
+        Returns:
+            List of check definitions
+        """
+        params: dict[str, Any] = {"enabled_only": enabled_only}
+        if asset_id:
+            params["asset_id"] = asset_id
+        response = self._request("GET", "/api/v1/checks", params=params)
+        checks: list[dict[str, Any]] = response.get("checks", [])
+        return checks
+
+    def get_check(self, check_id: str) -> dict[str, Any]:
+        """Get check details by ID.
+
+        Args:
+            check_id: UUID of the check
+
+        Returns:
+            Check definition details
+        """
+        return self._request("GET", f"/api/v1/checks/{check_id}")
+
+    def update_check(
+        self,
+        check_id: str,
+        enabled: bool | None = None,
+        blocking: bool | None = None,
+        severity: str | None = None,
+    ) -> dict[str, Any]:
+        """Update check properties.
+
+        Args:
+            check_id: UUID of the check to update
+            enabled: Set enabled status
+            blocking: Set blocking status
+            severity: Set severity level ("error", "warning", "info")
+
+        Returns:
+            Updated check details
+        """
+        payload: dict[str, Any] = {}
+        if enabled is not None:
+            payload["enabled"] = enabled
+        if blocking is not None:
+            payload["blocking"] = blocking
+        if severity is not None:
+            payload["severity"] = severity
+        return self._request("PATCH", f"/api/v1/checks/{check_id}", json=payload)
+
+    def delete_check(self, check_id: str) -> None:
+        """Delete a check.
+
+        Args:
+            check_id: UUID of the check to delete
+        """
+        self._request("DELETE", f"/api/v1/checks/{check_id}")
+
+    def sync_checks_for_asset(
+        self,
+        asset_id: str,
+        checks: list[CheckDefinition],
+    ) -> dict[str, Any]:
+        """Sync local check definitions to backend for an asset.
+
+        Creates new checks, updates existing ones based on name matching.
+
+        Args:
+            asset_id: UUID of the asset
+            checks: List of CheckDefinitions to sync
+
+        Returns:
+            Sync result with created, updated, unchanged counts
+        """
+        payloads = [c.to_api_payload() for c in checks]
+        return self._request(
+            "POST",
+            f"/api/v1/assets/{asset_id}/checks/sync",
+            json={"checks": payloads},
+        )
+
+    def get_check_results(
+        self,
+        execution_id: str,
+    ) -> list[dict[str, Any]]:
+        """Get check results for an execution.
+
+        Args:
+            execution_id: UUID of the execution
+
+        Returns:
+            List of check results for the execution
+        """
+        response = self._request(
+            "GET", f"/api/v1/executions/{execution_id}/check-results"
+        )
+        results: list[dict[str, Any]] = response.get("results", [])
+        return results
+
 
 class AsyncServoClient:
     """Async client for interacting with Servo API."""
@@ -469,3 +597,77 @@ class AsyncServoClient:
     async def health(self) -> dict[str, Any]:
         """Check API health."""
         return await self._request("GET", "/api/v1/health")
+
+    # ========== Check Operations ==========
+
+    async def create_check(
+        self,
+        asset_id: str,
+        check: CheckDefinition,
+    ) -> dict[str, Any]:
+        """Create a check for an asset in the backend."""
+        payload = check.to_api_payload()
+        payload["asset_id"] = asset_id
+        return await self._request("POST", "/api/v1/checks", json=payload)
+
+    async def list_checks(
+        self,
+        asset_id: str | None = None,
+        enabled_only: bool = True,
+    ) -> list[dict[str, Any]]:
+        """List checks, optionally filtered by asset."""
+        params: dict[str, Any] = {"enabled_only": enabled_only}
+        if asset_id:
+            params["asset_id"] = asset_id
+        response = await self._request("GET", "/api/v1/checks", params=params)
+        checks: list[dict[str, Any]] = response.get("checks", [])
+        return checks
+
+    async def get_check(self, check_id: str) -> dict[str, Any]:
+        """Get check details by ID."""
+        return await self._request("GET", f"/api/v1/checks/{check_id}")
+
+    async def update_check(
+        self,
+        check_id: str,
+        enabled: bool | None = None,
+        blocking: bool | None = None,
+        severity: str | None = None,
+    ) -> dict[str, Any]:
+        """Update check properties."""
+        payload: dict[str, Any] = {}
+        if enabled is not None:
+            payload["enabled"] = enabled
+        if blocking is not None:
+            payload["blocking"] = blocking
+        if severity is not None:
+            payload["severity"] = severity
+        return await self._request("PATCH", f"/api/v1/checks/{check_id}", json=payload)
+
+    async def delete_check(self, check_id: str) -> None:
+        """Delete a check."""
+        await self._request("DELETE", f"/api/v1/checks/{check_id}")
+
+    async def sync_checks_for_asset(
+        self,
+        asset_id: str,
+        checks: list[CheckDefinition],
+    ) -> dict[str, Any]:
+        """Sync local check definitions to backend for an asset."""
+        payloads = [c.to_api_payload() for c in checks]
+        return await self._request(
+            "POST",
+            f"/api/v1/assets/{asset_id}/checks/sync",
+            json={"checks": payloads},
+        )
+
+    async def get_check_results(
+        self,
+        execution_id: str,
+    ) -> list[dict[str, Any]]:
+        """Get check results for an execution."""
+        response = await self._request(
+            "GET", f"/api/v1/executions/{execution_id}/check-results"
+        )
+        results: list[dict[str, Any]] = response.get("results", [])
+        return results

@@ -169,3 +169,232 @@ class WorkflowDefinition:
             "timeout_seconds": self.timeout_seconds,
             "retries": self.retries,
         }
+
+
+# ========== Data Quality Types ==========
+
+
+class CheckSeverity(str, Enum):
+    """Severity level for data quality checks."""
+
+    ERROR = "error"  # Blocks downstream execution if blocking=True
+    WARNING = "warning"  # Logged + alerts, but workflow continues
+    INFO = "info"  # Informational only, logged but no alerts
+
+
+class CheckStatus(str, Enum):
+    """Result status of a check execution."""
+
+    PASSED = "passed"
+    FAILED = "failed"
+    SKIPPED = "skipped"
+    ERROR = "error"  # Check itself errored (not a data quality failure)
+
+
+@dataclass
+class CheckResult:
+    """Result of a data quality check execution."""
+
+    check_name: str
+    status: CheckStatus
+    severity: CheckSeverity
+    asset_name: str
+    blocking: bool = True
+    message: str | None = None
+    rows_checked: int | None = None
+    rows_failed: int | None = None
+    details: dict[str, Any] = field(default_factory=dict)
+    executed_at: datetime = field(default_factory=datetime.utcnow)
+    duration_ms: float | None = None
+
+    @property
+    def passed(self) -> bool:
+        """Check if the result passed."""
+        return self.status == CheckStatus.PASSED
+
+    @property
+    def should_block(self) -> bool:
+        """Check if this result should block downstream execution."""
+        return (
+            self.blocking
+            and self.status in (CheckStatus.FAILED, CheckStatus.ERROR)
+            and self.severity == CheckSeverity.ERROR
+        )
+
+    @property
+    def failure_rate(self) -> float | None:
+        """Calculate failure rate as a percentage if row counts available."""
+        if self.rows_checked and self.rows_checked > 0:
+            return ((self.rows_failed or 0) / self.rows_checked) * 100.0
+        return None
+
+    @classmethod
+    def success(
+        cls,
+        check_name: str,
+        asset_name: str,
+        *,
+        rows_checked: int | None = None,
+        message: str | None = None,
+        details: dict[str, Any] | None = None,
+        duration_ms: float | None = None,
+    ) -> CheckResult:
+        """Factory for a successful check result."""
+        return cls(
+            check_name=check_name,
+            status=CheckStatus.PASSED,
+            severity=CheckSeverity.ERROR,
+            asset_name=asset_name,
+            message=message,
+            rows_checked=rows_checked,
+            rows_failed=0,
+            details=details or {},
+            duration_ms=duration_ms,
+        )
+
+    @classmethod
+    def failure(
+        cls,
+        check_name: str,
+        asset_name: str,
+        message: str,
+        *,
+        severity: CheckSeverity = CheckSeverity.ERROR,
+        blocking: bool = True,
+        rows_checked: int | None = None,
+        rows_failed: int | None = None,
+        details: dict[str, Any] | None = None,
+        duration_ms: float | None = None,
+    ) -> CheckResult:
+        """Factory for a failed check result."""
+        return cls(
+            check_name=check_name,
+            status=CheckStatus.FAILED,
+            severity=severity,
+            asset_name=asset_name,
+            blocking=blocking,
+            message=message,
+            rows_checked=rows_checked,
+            rows_failed=rows_failed,
+            details=details or {},
+            duration_ms=duration_ms,
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to dictionary for API serialization."""
+        result: dict[str, Any] = {
+            "check_name": self.check_name,
+            "status": self.status.value,
+            "severity": self.severity.value,
+            "asset_name": self.asset_name,
+            "blocking": self.blocking,
+            "executed_at": self.executed_at.isoformat(),
+        }
+        if self.message is not None:
+            result["message"] = self.message
+        if self.rows_checked is not None:
+            result["rows_checked"] = self.rows_checked
+        if self.rows_failed is not None:
+            result["rows_failed"] = self.rows_failed
+        if self.details:
+            result["details"] = self.details
+        if self.duration_ms is not None:
+            result["duration_ms"] = self.duration_ms
+        return result
+
+
+@dataclass
+class CheckDefinition:
+    """Definition of a registered check."""
+
+    name: str
+    asset_name: str
+    check_type: str  # "not_null", "unique", "in_range", "regex", etc.
+    severity: CheckSeverity
+    blocking: bool
+    function_name: str
+    module: str
+    description: str | None = None
+    parameters: dict[str, Any] = field(default_factory=dict)
+    column: str | None = None  # For column-specific checks
+
+    def to_rust_check_type(self) -> dict[str, Any]:
+        """Convert to Rust CheckType JSON schema.
+
+        This generates JSON that matches the Rust backend's CheckType enum
+        which uses #[serde(tag = "type")] for tagged serialization.
+        """
+        if self.check_type == "not_null":
+            columns = self.parameters.get("columns", [self.column] if self.column else [])
+            return {"type": "not_null", "columns": columns}
+        elif self.check_type == "unique":
+            columns = self.parameters.get("columns", [self.column] if self.column else [])
+            return {"type": "unique", "columns": columns}
+        elif self.check_type == "in_range":
+            return {
+                "type": "in_range",
+                "column": self.column,
+                "min": self.parameters.get("min"),
+                "max": self.parameters.get("max"),
+            }
+        elif self.check_type == "regex":
+            return {
+                "type": "regex",
+                "column": self.column,
+                "pattern": self.parameters.get("pattern"),
+            }
+        elif self.check_type == "row_count":
+            return {
+                "type": "row_count",
+                "min": self.parameters.get("min"),
+                "max": self.parameters.get("max"),
+            }
+        elif self.check_type == "accepted_values":
+            return {
+                "type": "accepted_values",
+                "column": self.column,
+                "values": self.parameters.get("values", []),
+            }
+        elif self.check_type == "no_duplicate_rows":
+            return {
+                "type": "no_duplicate_rows",
+                "columns": self.parameters.get("columns"),
+            }
+        elif self.check_type == "freshness":
+            return {
+                "type": "freshness",
+                "timestamp_column": self.column,
+                "max_age_seconds": self.parameters.get("max_age_seconds"),
+            }
+        else:
+            # Custom check - pass through
+            return {"type": "custom", "name": self.name, "description": self.description or ""}
+
+    def to_api_payload(self) -> dict[str, Any]:
+        """Convert to API payload for backend sync."""
+        return {
+            "name": self.name,
+            "description": self.description,
+            "check_type": self.to_rust_check_type(),
+            "severity": self.severity.value,
+            "blocking": self.blocking,
+        }
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to dictionary for API serialization."""
+        result: dict[str, Any] = {
+            "name": self.name,
+            "asset_name": self.asset_name,
+            "check_type": self.check_type,
+            "severity": self.severity.value,
+            "blocking": self.blocking,
+            "function_name": self.function_name,
+            "module": self.module,
+        }
+        if self.description is not None:
+            result["description"] = self.description
+        if self.parameters:
+            result["parameters"] = self.parameters
+        if self.column is not None:
+            result["column"] = self.column
+        return result
