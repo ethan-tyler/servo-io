@@ -479,3 +479,173 @@ class TestDecoratorCheckTypes:
         assert check_def.check_type == "freshness"
         assert check_def.column == "updated_at"
         assert check_def.parameters == {"max_age_seconds": 3600}
+
+    def test_referential_integrity_decorator_sets_check_type(self) -> None:
+        """Test check.referential_integrity sets correct check_type."""
+        from servo import asset, check
+
+        @check.referential_integrity("customer_id", "customers", "id")
+        @asset(name="orders")
+        def orders() -> list:
+            return []
+
+        registry = get_check_registry()
+        check_def = registry.get("referential_integrity_customer_id")
+
+        assert check_def is not None
+        assert check_def.check_type == "referential_integrity"
+        assert check_def.column == "customer_id"
+        assert check_def.parameters == {
+            "reference_table": "customers",
+            "reference_column": "id",
+        }
+
+    def test_schema_match_decorator_sets_check_type(self) -> None:
+        """Test check.schema_match sets correct check_type."""
+        from servo import asset, check
+
+        @check.schema_match(["id", "name", "email"], allow_extra_columns=False)
+        @asset(name="user_profiles")
+        def user_profiles() -> list:
+            return []
+
+        registry = get_check_registry()
+        check_def = registry.get("schema_match")
+
+        assert check_def is not None
+        assert check_def.check_type == "schema_match"
+        assert check_def.parameters == {
+            "expected_columns": ["id", "name", "email"],
+            "allow_extra_columns": False,
+        }
+
+
+class TestReferentialIntegritySchema:
+    """Test referential_integrity check generates correct Rust schema."""
+
+    def test_referential_integrity_rust_schema(self) -> None:
+        """Test RI check generates correct Rust-compatible schema."""
+        defn = CheckDefinition(
+            name="fk_customer",
+            asset_name="orders",
+            check_type="referential_integrity",
+            severity=CheckSeverity.ERROR,
+            blocking=True,
+            function_name="test",
+            module="test",
+            column="customer_id",
+            parameters={
+                "reference_table": "customers",
+                "reference_column": "id",
+            },
+        )
+        assert defn.to_rust_check_type() == {
+            "type": "referential_integrity",
+            "column": "customer_id",
+            "reference_table": "customers",
+            "reference_column": "id",
+        }
+
+    def test_referential_integrity_api_payload(self) -> None:
+        """Test RI check generates correct API payload."""
+        defn = CheckDefinition(
+            name="fk_user",
+            asset_name="posts",
+            check_type="referential_integrity",
+            severity=CheckSeverity.WARNING,
+            blocking=False,
+            function_name="test",
+            module="test",
+            description="Posts must reference valid users",
+            column="user_id",
+            parameters={
+                "reference_table": "users",
+                "reference_column": "id",
+            },
+        )
+        payload = defn.to_api_payload()
+
+        assert payload["name"] == "fk_user"
+        assert payload["description"] == "Posts must reference valid users"
+        assert payload["severity"] == "warning"
+        assert payload["blocking"] is False
+        assert payload["check_type"] == {
+            "type": "referential_integrity",
+            "column": "user_id",
+            "reference_table": "users",
+            "reference_column": "id",
+        }
+
+
+class TestSchemaMatchSchema:
+    """Test schema_match check generates correct Rust schema."""
+
+    def test_schema_match_rust_schema(self) -> None:
+        """Test schema_match generates correct Rust-compatible schema."""
+        defn = CheckDefinition(
+            name="schema_check",
+            asset_name="customers",
+            check_type="schema_match",
+            severity=CheckSeverity.ERROR,
+            blocking=True,
+            function_name="test",
+            module="test",
+            parameters={
+                "expected_columns": ["id", "name", "email"],
+                "allow_extra_columns": True,
+            },
+        )
+        assert defn.to_rust_check_type() == {
+            "type": "schema_match",
+            "expected_columns": ["id", "name", "email"],
+            "allow_extra_columns": True,
+        }
+
+    def test_schema_match_strict_mode_schema(self) -> None:
+        """Test schema_match with strict mode (no extra columns)."""
+        defn = CheckDefinition(
+            name="strict_schema",
+            asset_name="contracts",
+            check_type="schema_match",
+            severity=CheckSeverity.ERROR,
+            blocking=True,
+            function_name="test",
+            module="test",
+            parameters={
+                "expected_columns": ["contract_id", "value"],
+                "allow_extra_columns": False,
+            },
+        )
+        assert defn.to_rust_check_type() == {
+            "type": "schema_match",
+            "expected_columns": ["contract_id", "value"],
+            "allow_extra_columns": False,
+        }
+
+    def test_schema_match_api_payload(self) -> None:
+        """Test schema_match generates correct API payload."""
+        defn = CheckDefinition(
+            name="required_columns",
+            asset_name="invoices",
+            check_type="schema_match",
+            severity=CheckSeverity.ERROR,
+            blocking=True,
+            function_name="test",
+            module="test",
+            description="Invoices must have required columns",
+            parameters={
+                "expected_columns": ["invoice_id", "amount", "date"],
+                "allow_extra_columns": True,
+            },
+        )
+        payload = defn.to_api_payload()
+
+        assert payload["name"] == "required_columns"
+        assert payload["description"] == "Invoices must have required columns"
+        assert payload["severity"] == "error"
+        assert payload["blocking"] is True
+        assert payload["check_type"] == {
+            "type": "schema_match",
+            "expected_columns": ["invoice_id", "amount", "date"],
+            "allow_extra_columns": True,
+        }
