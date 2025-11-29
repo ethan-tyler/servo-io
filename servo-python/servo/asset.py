@@ -87,6 +87,8 @@ class Asset:
         metadata: dict[str, Any] | None = None,
         group: str | None = None,
         is_source: bool = False,
+        partition: Any | None = None,
+        partition_mappings: dict[str, Any] | None = None,
     ) -> None:
         self._func = func
         # Explicitly check for empty string (don't fall back to func.__name__)
@@ -97,6 +99,8 @@ class Asset:
         self._description = description or func.__doc__
         self._group = group
         self._is_source = is_source
+        self._partition = partition
+        self._partition_mappings = partition_mappings
 
         # Build metadata
         meta_dict = metadata or {}
@@ -164,6 +168,8 @@ class Asset:
             metadata=self._metadata,
             group=self._group,
             is_source=self._is_source,
+            partition=self._partition,
+            partition_mappings=self._partition_mappings,
         )
         _asset_registry[self._name] = definition
 
@@ -186,6 +192,16 @@ class Asset:
     def description(self) -> str | None:
         """Get asset description."""
         return self._description
+
+    @property
+    def partition(self) -> Any | None:
+        """Get partition definition."""
+        return self._partition
+
+    @property
+    def partition_mappings(self) -> dict[str, Any] | None:
+        """Get partition mappings for dependencies."""
+        return self._partition_mappings
 
     @property
     def definition(self) -> AssetDefinition:
@@ -235,6 +251,8 @@ def asset(
     metadata: dict[str, Any] | None = None,
     group: str | None = None,
     is_source: bool = False,
+    partition: Any | None = None,
+    partition_mappings: dict[str, Any] | None = None,
 ) -> Callable[[Callable[..., Any]], Asset]: ...
 
 
@@ -247,6 +265,8 @@ def asset(
     metadata: dict[str, Any] | None = None,
     group: str | None = None,
     is_source: bool = False,
+    partition: Any | None = None,
+    partition_mappings: dict[str, Any] | None = None,
 ) -> Asset | Callable[[Callable[..., Any]], Asset]:
     """
     Decorator to define a data asset.
@@ -261,6 +281,13 @@ def asset(
         def my_asset():
             return data
 
+        @asset(
+            name="daily_sales",
+            partition=DailyPartition(start_date="2023-01-01"),
+        )
+        def daily_sales(context):
+            return load_sales(context.partition_key)
+
     Args:
         func: The function to wrap (when used without parentheses)
         name: Override asset name (defaults to function name)
@@ -269,6 +296,8 @@ def asset(
         metadata: Dictionary of metadata (owner, team, tags, etc.)
         group: Optional grouping for organization
         is_source: True if this is a source asset (no upstream)
+        partition: Partition definition for partitioned assets
+        partition_mappings: Mapping from dependency names to PartitionMapping
 
     Returns:
         Asset wrapper or decorator function
@@ -287,6 +316,8 @@ def asset(
             metadata=metadata,
             group=group,
             is_source=is_source,
+            partition=partition,
+            partition_mappings=partition_mappings,
         )
 
     return decorator

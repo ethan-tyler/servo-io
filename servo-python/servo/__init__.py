@@ -19,6 +19,22 @@ from servo.exceptions import (
     ServoTimeoutError,
     ServoValidationError,
 )
+from servo.partitions import (
+    AllUpstreamMapping,
+    DailyPartition,
+    DimensionMapping,
+    DynamicPartition,
+    HourlyPartition,
+    IdentityMapping,
+    MonthlyPartition,
+    MultiPartition,
+    PartitionContext,
+    PartitionDefinition,
+    PartitionMapping,
+    StaticPartition,
+    TimeWindowMapping,
+    WeeklyPartition,
+)
 from servo.quality import (
     asset_check,
     check,
@@ -44,6 +60,7 @@ from servo.workflow import get_workflow, get_workflow_registry, workflow
 __version__ = "0.1.0"
 
 __all__ = [
+    "AllUpstreamMapping",
     "AssetExecutionError",
     "AssetOutput",
     "AssetStatus",
@@ -54,7 +71,17 @@ __all__ = [
     "CheckResult",
     "CheckSeverity",
     "CheckStatus",
+    "DailyPartition",
+    "DimensionMapping",
+    "DynamicPartition",
+    "HourlyPartition",
+    "IdentityMapping",
     "Materialization",
+    "MonthlyPartition",
+    "MultiPartition",
+    "PartitionContext",
+    "PartitionDefinition",
+    "PartitionMapping",
     "ServoAPIError",
     "ServoClient",
     "ServoConfigError",
@@ -62,6 +89,9 @@ __all__ = [
     "ServoError",
     "ServoTimeoutError",
     "ServoValidationError",
+    "StaticPartition",
+    "TimeWindowMapping",
+    "WeeklyPartition",
     "asset",
     "asset_check",
     "check",
