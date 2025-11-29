@@ -14,6 +14,66 @@ DataFrame = TypeVar("DataFrame")
 Table = TypeVar("Table")
 
 
+# ========== Type Mappings for Schema Validation ==========
+
+# Map pandas dtypes to canonical type names
+PANDAS_TYPE_MAP: dict[str, str] = {
+    "object": "string",
+    "string": "string",
+    "int64": "int64",
+    "int32": "int32",
+    "Int64": "int64",  # nullable int
+    "Int32": "int32",  # nullable int
+    "float64": "float64",
+    "float32": "float32",
+    "Float64": "float64",  # nullable float
+    "datetime64[ns]": "datetime",
+    "datetime64[ns, UTC]": "datetime",
+    "bool": "bool",
+    "boolean": "bool",  # nullable bool
+    "category": "category",
+}
+
+# Map polars dtypes to canonical type names
+POLARS_TYPE_MAP: dict[str, str] = {
+    "Utf8": "string",
+    "String": "string",
+    "Int64": "int64",
+    "Int32": "int32",
+    "Int16": "int16",
+    "Int8": "int8",
+    "UInt64": "uint64",
+    "UInt32": "uint32",
+    "Float64": "float64",
+    "Float32": "float32",
+    "Datetime": "datetime",
+    "Date": "date",
+    "Boolean": "bool",
+    "Categorical": "category",
+}
+
+
+@dataclass
+class SchemaColumn:
+    """Schema column definition for type-aware schema matching.
+
+    Used to define expected column structure including name, data type,
+    and nullability for schema validation checks.
+    """
+
+    name: str
+    data_type: str = "any"  # "string", "int64", "float64", "datetime", "bool", etc.
+    nullable: bool = True
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to dictionary representation."""
+        return {
+            "name": self.name,
+            "data_type": self.data_type,
+            "nullable": self.nullable,
+        }
+
+
 class AssetStatus(str, Enum):
     """Status of an asset materialization."""
 
@@ -365,6 +425,19 @@ class CheckDefinition:
                 "type": "freshness",
                 "timestamp_column": self.column,
                 "max_age_seconds": self.parameters.get("max_age_seconds"),
+            }
+        elif self.check_type == "referential_integrity":
+            return {
+                "type": "referential_integrity",
+                "column": self.column,
+                "reference_table": self.parameters.get("reference_table"),
+                "reference_column": self.parameters.get("reference_column"),
+            }
+        elif self.check_type == "schema_match":
+            return {
+                "type": "schema_match",
+                "expected_columns": self.parameters.get("expected_columns", []),
+                "allow_extra_columns": self.parameters.get("allow_extra_columns", True),
             }
         else:
             # Custom check - pass through
