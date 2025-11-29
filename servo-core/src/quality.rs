@@ -571,7 +571,9 @@ impl CheckResult {
     /// Calculate failure rate as a percentage
     pub fn failure_rate(&self) -> Option<f64> {
         match (self.failed_row_count, self.total_row_count) {
-            (Some(failed), Some(total)) if total > 0 => Some((failed as f64 / total as f64) * 100.0),
+            (Some(failed), Some(total)) if total > 0 => {
+                Some((failed as f64 / total as f64) * 100.0)
+            }
             _ => None,
         }
     }
@@ -847,7 +849,10 @@ mod tests {
         let result = CheckResult::failed(&check, execution_id, 50, "Found 10 null values");
 
         assert_eq!(result.outcome, CheckOutcome::Failed);
-        assert_eq!(result.error_message, Some("Found 10 null values".to_string()));
+        assert_eq!(
+            result.error_message,
+            Some("Found 10 null values".to_string())
+        );
         assert!(result.should_block()); // Blocking error severity failure
     }
 

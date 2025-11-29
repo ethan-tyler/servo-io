@@ -31,12 +31,7 @@ use opentelemetry_sdk::{
 };
 use opentelemetry_semantic_conventions::resource::{SERVICE_NAME, SERVICE_VERSION};
 use std::time::Duration;
-use tracing_subscriber::{
-    fmt,
-    layer::SubscriberExt,
-    util::SubscriberInitExt,
-    EnvFilter, Layer,
-};
+use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Layer};
 
 use crate::sensitive_filter::SensitiveDataFilteringExporter;
 
@@ -248,9 +243,10 @@ pub fn init_tracing(
         // Build tracer provider based on exporter type
         let provider = match config.exporter {
             TraceExporter::Otlp => {
-                let endpoint = config.otlp_endpoint.clone().unwrap_or_else(|| {
-                    "https://cloudtrace.googleapis.com".to_string()
-                });
+                let endpoint = config
+                    .otlp_endpoint
+                    .clone()
+                    .unwrap_or_else(|| "https://cloudtrace.googleapis.com".to_string());
 
                 let base_exporter = opentelemetry_otlp::new_exporter()
                     .tonic()
@@ -267,9 +263,10 @@ pub fn init_tracing(
                     .build()
             }
             TraceExporter::Jaeger => {
-                let endpoint = config.jaeger_endpoint.clone().unwrap_or_else(|| {
-                    "http://localhost:4317".to_string()
-                });
+                let endpoint = config
+                    .jaeger_endpoint
+                    .clone()
+                    .unwrap_or_else(|| "http://localhost:4317".to_string());
 
                 let base_exporter = opentelemetry_otlp::new_exporter()
                     .tonic()

@@ -64,7 +64,8 @@ struct PiiPatterns {
     ipv4: Regex,
 }
 
-static PII_PATTERNS: LazyLock<PiiPatterns> = LazyLock::new(|| PiiPatterns {
+static PII_PATTERNS: LazyLock<PiiPatterns> = LazyLock::new(|| {
+    PiiPatterns {
     // Email: standard format
     email: Regex::new(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}")
         .expect("Invalid email regex"),
@@ -84,6 +85,7 @@ static PII_PATTERNS: LazyLock<PiiPatterns> = LazyLock::new(|| PiiPatterns {
     // IPv4 addresses
     ipv4: Regex::new(r"\b(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\b")
         .expect("Invalid IPv4 regex"),
+}
 });
 
 /// PII filter that redacts sensitive data from strings
@@ -108,7 +110,10 @@ impl PiiFilter {
         let mut result = input.to_string();
 
         if self.config.redact_emails {
-            result = PII_PATTERNS.email.replace_all(&result, "[EMAIL]").to_string();
+            result = PII_PATTERNS
+                .email
+                .replace_all(&result, "[EMAIL]")
+                .to_string();
         }
 
         if self.config.redact_ssn {
@@ -123,7 +128,10 @@ impl PiiFilter {
         }
 
         if self.config.redact_phone_numbers {
-            result = PII_PATTERNS.phone.replace_all(&result, "[PHONE]").to_string();
+            result = PII_PATTERNS
+                .phone
+                .replace_all(&result, "[PHONE]")
+                .to_string();
         }
 
         if self.config.redact_ip_addresses {
@@ -205,18 +213,9 @@ mod tests {
     #[test]
     fn test_redact_credit_card() {
         let filter = PiiFilter::default_filter();
-        assert_eq!(
-            filter.redact("Card: 4111-1111-1111-1111"),
-            "Card: [CARD]"
-        );
-        assert_eq!(
-            filter.redact("Card: 4111 1111 1111 1111"),
-            "Card: [CARD]"
-        );
-        assert_eq!(
-            filter.redact("Card: 4111111111111111"),
-            "Card: [CARD]"
-        );
+        assert_eq!(filter.redact("Card: 4111-1111-1111-1111"), "Card: [CARD]");
+        assert_eq!(filter.redact("Card: 4111 1111 1111 1111"), "Card: [CARD]");
+        assert_eq!(filter.redact("Card: 4111111111111111"), "Card: [CARD]");
     }
 
     #[test]
@@ -306,9 +305,6 @@ mod tests {
 
     #[test]
     fn test_global_redact_function() {
-        assert_eq!(
-            redact_pii("Contact: test@example.com"),
-            "Contact: [EMAIL]"
-        );
+        assert_eq!(redact_pii("Contact: test@example.com"), "Contact: [EMAIL]");
     }
 }

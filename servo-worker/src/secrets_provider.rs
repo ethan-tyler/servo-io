@@ -75,7 +75,9 @@ impl SecretsProvider {
     }
 
     /// Create provider using GCP Secret Manager
-    async fn new_with_secret_manager(environment: RuntimeEnvironment) -> Result<Self, SecretsError> {
+    async fn new_with_secret_manager(
+        environment: RuntimeEnvironment,
+    ) -> Result<Self, SecretsError> {
         let project_id = env::var("GCP_PROJECT_ID").map_err(|_| {
             SecretsError::InitializationFailed(
                 "GCP_PROJECT_ID environment variable required for Secret Manager".to_string(),

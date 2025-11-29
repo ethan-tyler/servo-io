@@ -51,7 +51,6 @@ Example usage:
 from __future__ import annotations
 
 import functools
-import inspect
 import re
 import time
 from typing import TYPE_CHECKING, Any, Callable, TypeVar
@@ -69,8 +68,8 @@ F = TypeVar("F", bound=Callable[..., Any])
 # Global registry of checks: name -> CheckDefinition
 _check_registry: dict[str, CheckDefinition] = {}
 
-# Registry of callable check instances: name -> AssetCheck
-_check_callables: dict[str, "AssetCheck"] = {}
+# Registry of callable check instances: name -> AssetCheck or _InlineCheckCallable
+_check_callables: dict[str, AssetCheck | _InlineCheckCallable] = {}
 
 # Mapping from asset name to list of check names
 _asset_checks: dict[str, list[str]] = {}
@@ -99,7 +98,7 @@ def get_checks_for_asset(asset_name: str) -> list[CheckDefinition]:
     return [_check_registry[name] for name in check_names if name in _check_registry]
 
 
-def _register_check(definition: CheckDefinition, callable_instance: "AssetCheck | None" = None) -> None:
+def _register_check(definition: CheckDefinition, callable_instance: AssetCheck | _InlineCheckCallable | None = None) -> None:
     """Register a check in the global registry."""
     if definition.name in _check_registry:
         raise ServoValidationError(
@@ -1235,10 +1234,7 @@ def deploy_checks(
     from servo.exceptions import ServoAPIError
 
     # Get checks to deploy
-    if asset_name:
-        checks = get_checks_for_asset(asset_name)
-    else:
-        checks = list(_check_registry.values())
+    checks = get_checks_for_asset(asset_name) if asset_name else list(_check_registry.values())
 
     results: dict[str, list[str]] = {"created": [], "updated": [], "skipped": []}
 

@@ -7,7 +7,9 @@
 //! - Concurrent probe handling
 //! - Recovery behavior
 
-use servo_storage::circuit_breaker::{CircuitBreakerConfig, CircuitBreakerError, DatabaseCircuitBreaker};
+use servo_storage::circuit_breaker::{
+    CircuitBreakerConfig, CircuitBreakerError, DatabaseCircuitBreaker,
+};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -31,15 +33,20 @@ async fn circuit_opens_after_exact_failure_threshold() {
             .call(|| async { Err::<(), _>(format!("failure {}", i)) })
             .await;
         assert!(matches!(result, Err(CircuitBreakerError::Failure(_))));
-        assert!(!breaker.is_open().await, "Circuit should NOT be open after {} failures", i + 1);
+        assert!(
+            !breaker.is_open().await,
+            "Circuit should NOT be open after {} failures",
+            i + 1
+        );
     }
 
     // Third failure should open circuit
-    let result = breaker
-        .call(|| async { Err::<(), _>("failure 3") })
-        .await;
+    let result = breaker.call(|| async { Err::<(), _>("failure 3") }).await;
     assert!(matches!(result, Err(CircuitBreakerError::Failure(_))));
-    assert!(breaker.is_open().await, "Circuit should be open after reaching threshold");
+    assert!(
+        breaker.is_open().await,
+        "Circuit should be open after reaching threshold"
+    );
 }
 
 #[tokio::test]
@@ -62,7 +69,11 @@ async fn circuit_rejects_immediately_when_open() {
     let elapsed = start.elapsed();
 
     // Should reject immediately (not wait for the 5 second operation)
-    assert!(elapsed < Duration::from_millis(100), "Should reject immediately, took {:?}", elapsed);
+    assert!(
+        elapsed < Duration::from_millis(100),
+        "Should reject immediately, took {:?}",
+        elapsed
+    );
     assert!(matches!(result, Err(CircuitBreakerError::CircuitOpen)));
 }
 
@@ -96,7 +107,9 @@ async fn circuit_closes_on_successful_probe() {
     tokio::time::sleep(Duration::from_millis(75)).await;
 
     // Successful probe should close the circuit
-    let result = breaker.call(|| async { Ok::<_, String>("recovered") }).await;
+    let result = breaker
+        .call(|| async { Ok::<_, String>("recovered") })
+        .await;
     assert!(result.is_ok());
 
     // Circuit should be closed
@@ -120,11 +133,15 @@ async fn circuit_reopens_on_failed_probe() {
     tokio::time::sleep(Duration::from_millis(75)).await;
 
     // Failed probe should keep circuit open
-    let result = breaker.call(|| async { Err::<(), _>("probe failed") }).await;
+    let result = breaker
+        .call(|| async { Err::<(), _>("probe failed") })
+        .await;
     assert!(matches!(result, Err(CircuitBreakerError::Failure(_))));
 
     // Circuit should remain in open state (need to wait for next timeout)
-    let _result = breaker.call(|| async { Ok::<_, String>("should fail") }).await;
+    let _result = breaker
+        .call(|| async { Ok::<_, String>("should fail") })
+        .await;
     // This might be CircuitOpen or might go through depending on timing
     // The important thing is the breaker is still protecting
 }
@@ -217,7 +234,9 @@ async fn failure_threshold_one_opens_immediately() {
     let breaker = test_breaker(1, 1000);
 
     // Single failure should open circuit
-    let result = breaker.call(|| async { Err::<(), _>("single failure") }).await;
+    let result = breaker
+        .call(|| async { Err::<(), _>("single failure") })
+        .await;
     assert!(matches!(result, Err(CircuitBreakerError::Failure(_))));
     assert!(breaker.is_open().await);
 }
@@ -229,7 +248,11 @@ async fn high_failure_threshold_requires_many_failures() {
     // 9 failures should not open circuit
     for i in 0..9 {
         let _ = breaker.call(|| async { Err::<(), _>("failure") }).await;
-        assert!(!breaker.is_open().await, "Should not open after {} failures", i + 1);
+        assert!(
+            !breaker.is_open().await,
+            "Should not open after {} failures",
+            i + 1
+        );
     }
 
     // 10th failure should open circuit
@@ -253,7 +276,10 @@ async fn circuit_handles_rapid_transitions() {
         // Close circuit with success
         let result = breaker.call(|| async { Ok::<_, String>("ok") }).await;
         assert!(result.is_ok(), "Should succeed after half-open timeout");
-        assert!(!breaker.is_open().await, "Circuit should be closed after success");
+        assert!(
+            !breaker.is_open().await,
+            "Circuit should be closed after success"
+        );
     }
 }
 
@@ -271,7 +297,9 @@ async fn circuit_preserves_error_type() {
         }
     }
 
-    let result = breaker.call(|| async { Err::<(), _>(CustomError(42)) }).await;
+    let result = breaker
+        .call(|| async { Err::<(), _>(CustomError(42)) })
+        .await;
 
     match result {
         Err(CircuitBreakerError::Failure(e)) => {

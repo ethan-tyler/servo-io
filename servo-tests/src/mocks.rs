@@ -181,10 +181,7 @@ pub fn compute_hmac_signature(payload: &[u8], secret: &str) -> String {
 }
 
 /// Helper to create a signed base64-encoded payload
-pub fn create_signed_payload(
-    payload: &serde_json::Value,
-    secret: &str,
-) -> (Vec<u8>, String) {
+pub fn create_signed_payload(payload: &serde_json::Value, secret: &str) -> (Vec<u8>, String) {
     use base64::{engine::general_purpose::STANDARD, Engine as _};
 
     let json_bytes = serde_json::to_vec(payload).expect("Failed to serialize payload");

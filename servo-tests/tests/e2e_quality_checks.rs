@@ -62,14 +62,13 @@ impl QualityTestHarness {
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
-        self.storage.create_workflow(&workflow, &self.tenant).await?;
+        self.storage
+            .create_workflow(&workflow, &self.tenant)
+            .await?;
         Ok(workflow_id)
     }
 
-    async fn run_workflow(
-        &self,
-        workflow_id: Uuid,
-    ) -> Result<Uuid, Box<dyn std::error::Error>> {
+    async fn run_workflow(&self, workflow_id: Uuid) -> Result<Uuid, Box<dyn std::error::Error>> {
         let execution_id = self
             .orchestrator
             .start_execution(workflow_id, &self.tenant, None)

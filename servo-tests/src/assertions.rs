@@ -141,8 +141,7 @@ impl ResponseAssertions {
     /// Get body as JSON value
     pub async fn into_json(self) -> (Self, Value) {
         let (assertions, bytes) = self.into_body_bytes().await;
-        let json: Value =
-            serde_json::from_slice(&bytes).expect("Response body is not valid JSON");
+        let json: Value = serde_json::from_slice(&bytes).expect("Response body is not valid JSON");
         (assertions, json)
     }
 }
@@ -227,8 +226,8 @@ pub fn assert_valid_uuid(s: &str) {
 
 /// Assert that a string matches a pattern
 pub fn assert_matches_pattern(s: &str, pattern: &str) {
-    let re = regex::Regex::new(pattern)
-        .unwrap_or_else(|_| panic!("Invalid regex pattern: {}", pattern));
+    let re =
+        regex::Regex::new(pattern).unwrap_or_else(|_| panic!("Invalid regex pattern: {}", pattern));
     assert!(
         re.is_match(s),
         "String '{}' does not match pattern '{}'",

@@ -183,13 +183,9 @@ impl ValidationResult {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum CheckType {
     /// Verify columns contain no null values
-    NotNull {
-        columns: Vec<String>,
-    },
+    NotNull { columns: Vec<String> },
     /// Verify columns have unique values
-    Unique {
-        columns: Vec<String>,
-    },
+    Unique { columns: Vec<String> },
     /// Verify numeric values fall within bounds
     InRange {
         column: String,
@@ -199,10 +195,7 @@ pub enum CheckType {
         max: Option<f64>,
     },
     /// Verify string values match a regex pattern
-    Regex {
-        column: String,
-        pattern: String,
-    },
+    Regex { column: String, pattern: String },
     /// Verify row count is within bounds
     RowCount {
         #[serde(default)]
@@ -211,10 +204,7 @@ pub enum CheckType {
         max: Option<i64>,
     },
     /// Verify values are in an allowed set
-    AcceptedValues {
-        column: String,
-        values: Vec<Value>,
-    },
+    AcceptedValues { column: String, values: Vec<Value> },
     /// Verify no duplicate rows exist
     NoDuplicateRows {
         #[serde(default)]
@@ -262,7 +252,9 @@ fn execute_check(check_type: &CheckType, data: &AssetOutput) -> ValidationResult
         CheckType::AcceptedValues { column, values } => {
             validate_accepted_values(column, values, data)
         }
-        CheckType::NoDuplicateRows { columns } => validate_no_duplicate_rows(columns.as_ref(), data),
+        CheckType::NoDuplicateRows { columns } => {
+            validate_no_duplicate_rows(columns.as_ref(), data)
+        }
         CheckType::Freshness { .. } => {
             // Freshness requires current time comparison - mark as not implemented
             ValidationResult::error("Freshness check not yet implemented in worker".to_string())
@@ -311,7 +303,10 @@ fn validate_not_null(columns: &[String], data: &AssetOutput) -> ValidationResult
         ValidationResult::failed_with_samples(
             failed_count,
             total,
-            format!("{} null values found in columns {:?}", failed_count, columns),
+            format!(
+                "{} null values found in columns {:?}",
+                failed_count, columns
+            ),
             Value::Array(failed_samples),
         )
     }
@@ -530,21 +525,13 @@ fn validate_row_count(min: Option<i64>, max: Option<i64>, data: &AssetOutput) ->
         ValidationResult::failed(
             0,
             count,
-            format!(
-                "Row count {} is below minimum {}",
-                count,
-                min.unwrap_or(0)
-            ),
+            format!("Row count {} is below minimum {}", count, min.unwrap_or(0)),
         )
     } else if above_max {
         ValidationResult::failed(
             0,
             count,
-            format!(
-                "Row count {} exceeds maximum {}",
-                count,
-                max.unwrap_or(0)
-            ),
+            format!("Row count {} exceeds maximum {}", count, max.unwrap_or(0)),
         )
     } else {
         ValidationResult::passed(count)

@@ -87,10 +87,7 @@ mod tests {
         F: FnOnce() -> R,
     {
         // Save original values
-        let originals: Vec<_> = vars
-            .iter()
-            .map(|(k, _)| (*k, env::var(*k).ok()))
-            .collect();
+        let originals: Vec<_> = vars.iter().map(|(k, _)| (*k, env::var(*k).ok())).collect();
 
         // Set new values
         for (key, value) in vars {
@@ -158,7 +155,10 @@ mod tests {
     #[test]
     fn test_cloud_run_defaults_to_production() {
         with_env_vars(
-            &[("K_SERVICE", Some("servo-worker")), ("SERVO_ENVIRONMENT", None)],
+            &[
+                ("K_SERVICE", Some("servo-worker")),
+                ("SERVO_ENVIRONMENT", None),
+            ],
             || {
                 let env = RuntimeEnvironment::detect();
                 assert_eq!(env, RuntimeEnvironment::Production);

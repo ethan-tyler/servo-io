@@ -416,7 +416,10 @@ impl GcpAuth {
         }
 
         let token = response.text().await.map_err(|e| {
-            Error::Auth(format!("Failed to read identity token from metadata: {}", e))
+            Error::Auth(format!(
+                "Failed to read identity token from metadata: {}",
+                e
+            ))
         })?;
 
         debug!(audience = %audience, "Fetched identity token from metadata server");
@@ -500,7 +503,9 @@ impl GcpAuth {
             .header(METADATA_FLAVOR_HEADER, METADATA_FLAVOR_VALUE)
             .send()
             .await
-            .map_err(|e| Error::Auth(format!("Failed to fetch access token from metadata: {}", e)))?;
+            .map_err(|e| {
+                Error::Auth(format!("Failed to fetch access token from metadata: {}", e))
+            })?;
 
         if !response.status().is_success() {
             return Err(Error::Auth(format!(

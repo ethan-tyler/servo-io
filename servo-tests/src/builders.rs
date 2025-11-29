@@ -88,7 +88,8 @@ impl ExecutionRequestBuilder {
 
     /// Add a custom header
     pub fn header(mut self, name: &str, value: &str) -> Self {
-        self.custom_headers.push((name.to_string(), value.to_string()));
+        self.custom_headers
+            .push((name.to_string(), value.to_string()));
         self
     }
 
@@ -109,8 +110,8 @@ impl ExecutionRequestBuilder {
         use sha2::Sha256;
 
         type HmacSha256 = Hmac<Sha256>;
-        let mut mac = HmacSha256::new_from_slice(secret.as_bytes())
-            .expect("HMAC can take key of any size");
+        let mut mac =
+            HmacSha256::new_from_slice(secret.as_bytes()).expect("HMAC can take key of any size");
         mac.update(payload_bytes);
         let result = mac.finalize();
         hex::encode(result.into_bytes())
@@ -123,9 +124,7 @@ impl ExecutionRequestBuilder {
         let base64_payload = STANDARD.encode(&json_bytes);
         let body_bytes = base64_payload.as_bytes().to_vec();
 
-        let mut builder = Request::builder()
-            .method("POST")
-            .uri("/execute");
+        let mut builder = Request::builder().method("POST").uri("/execute");
 
         // Add content type if set
         if let Some(ct) = &self.content_type {

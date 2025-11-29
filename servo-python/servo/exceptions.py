@@ -147,7 +147,7 @@ class BlockingCheckError(ServoError):
         message: str,
         check_name: str,
         asset_name: str,
-        failed_results: list | None = None,
+        failed_results: list[Any] | None = None,
     ) -> None:
         details: dict[str, Any] = {
             "check_name": check_name,

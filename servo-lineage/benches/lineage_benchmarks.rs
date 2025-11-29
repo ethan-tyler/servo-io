@@ -283,16 +283,12 @@ fn bench_cycle_detection(c: &mut Criterion) {
     for size in [3, 5, 7].iter() {
         let (graph, _, _) = create_diamond_graph(*size, 10);
 
-        group.bench_with_input(
-            BenchmarkId::new("diamond_layers", size),
-            &graph,
-            |b, g| {
-                b.iter(|| {
-                    let has_cycle = g.has_cycles();
-                    black_box(has_cycle)
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("diamond_layers", size), &graph, |b, g| {
+            b.iter(|| {
+                let has_cycle = g.has_cycles();
+                black_box(has_cycle)
+            });
+        });
     }
 
     group.finish();
@@ -324,16 +320,12 @@ fn bench_impact_analysis(c: &mut Criterion) {
         let analysis = ImpactAnalysis::new(&graph);
         let first_id = asset_ids[0];
 
-        group.bench_with_input(
-            BenchmarkId::new("chain_first", size),
-            &first_id,
-            |b, id| {
-                b.iter(|| {
-                    let impact = analysis.analyze_change(black_box(id));
-                    black_box(impact)
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("chain_first", size), &first_id, |b, id| {
+            b.iter(|| {
+                let impact = analysis.analyze_change(black_box(id));
+                black_box(impact)
+            });
+        });
     }
 
     // Diamond graph impact

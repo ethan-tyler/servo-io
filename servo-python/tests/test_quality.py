@@ -42,7 +42,7 @@ class MockDataFrame:
     def __getitem__(self, key):
         return MockColumn(self._data.get(key, []))
 
-    def duplicated(self, subset=None):
+    def duplicated(self, subset=None):  # noqa: ARG002
         """Mock duplicated check."""
         return MockBooleanSeries([False] * self._len)
 
@@ -143,7 +143,7 @@ class TestAssetCheckDecorator:
         """Test @asset_check with custom name."""
 
         @asset_check(asset="orders", name="validate_orders")
-        def my_check(data):
+        def my_check(_data):
             return True
 
         assert my_check.name == "validate_orders"
@@ -152,7 +152,7 @@ class TestAssetCheckDecorator:
         """Test check is registered in global registry."""
 
         @asset_check(asset="products")
-        def check_products(data):
+        def check_products(_data):
             return True
 
         registry = get_check_registry()
@@ -163,7 +163,7 @@ class TestAssetCheckDecorator:
         """Test getting check by name."""
 
         @asset_check(asset="users")
-        def check_users(data):
+        def check_users(_data):
             return True
 
         found = get_check("check_users")
@@ -178,15 +178,15 @@ class TestAssetCheckDecorator:
         """Test getting all checks for an asset."""
 
         @asset_check(asset="orders", name="check_1")
-        def c1(data):
+        def c1(_data):
             return True
 
         @asset_check(asset="orders", name="check_2")
-        def c2(data):
+        def c2(_data):
             return True
 
         @asset_check(asset="customers", name="check_3")
-        def c3(data):
+        def c3(_data):
             return True
 
         order_checks = get_checks_for_asset("orders")
@@ -201,7 +201,7 @@ class TestAssetCheckDecorator:
         """Test check returning True."""
 
         @asset_check(asset="test_asset")
-        def check_pass(data):
+        def check_pass(_data):
             return True
 
         result = check_pass({"data": [1, 2, 3]})
@@ -213,7 +213,7 @@ class TestAssetCheckDecorator:
         """Test check returning False."""
 
         @asset_check(asset="test_asset", severity=CheckSeverity.WARNING)
-        def check_fail(data):
+        def check_fail(_data):
             return False
 
         result = check_fail({"data": []})
@@ -225,7 +225,7 @@ class TestAssetCheckDecorator:
         """Test check returning CheckResult directly."""
 
         @asset_check(asset="test_asset")
-        def check_custom(data):
+        def check_custom(_data):
             return CheckResult.success(
                 check_name="check_custom",
                 asset_name="test_asset",
@@ -240,15 +240,15 @@ class TestAssetCheckDecorator:
         """Test different severity levels."""
 
         @asset_check(asset="test", severity=CheckSeverity.INFO)
-        def info_check(data):
+        def info_check(_data):
             return False
 
         @asset_check(asset="test", severity=CheckSeverity.WARNING, name="warn_check")
-        def warn_check(data):
+        def warn_check(_data):
             return False
 
         @asset_check(asset="test", severity=CheckSeverity.ERROR, name="err_check")
-        def err_check(data):
+        def err_check(_data):
             return False
 
         assert info_check({}).severity == CheckSeverity.INFO
@@ -259,11 +259,11 @@ class TestAssetCheckDecorator:
         """Test blocking vs non-blocking checks."""
 
         @asset_check(asset="test", blocking=True)
-        def blocking_check(data):
+        def blocking_check(_data):
             return False
 
         @asset_check(asset="test", blocking=False, name="non_blocking")
-        def non_blocking_check(data):
+        def non_blocking_check(_data):
             return False
 
         assert blocking_check({}).blocking is True
@@ -273,7 +273,7 @@ class TestAssetCheckDecorator:
         """Test that exceptions in checks are wrapped."""
 
         @asset_check(asset="test")
-        def failing_check(data):
+        def failing_check(_data):
             raise ValueError("Something went wrong")
 
         with pytest.raises(CheckExecutionError) as exc:
@@ -287,13 +287,13 @@ class TestAssetCheckDecorator:
         """Test that duplicate check names raise error."""
 
         @asset_check(asset="test", name="unique_check")
-        def first(data):
+        def first(_data):
             return True
 
         with pytest.raises(ServoValidationError) as exc:
 
             @asset_check(asset="test", name="unique_check")
-            def second(data):
+            def second(_data):
                 return True
 
         assert "already registered" in str(exc.value)
@@ -302,7 +302,7 @@ class TestAssetCheckDecorator:
         """Test that wrapper preserves function metadata."""
 
         @asset_check(asset="test")
-        def documented_check(data):
+        def documented_check(_data):
             """This is the check docstring."""
             return True
 
@@ -324,7 +324,7 @@ class TestAssetCheckDecorator:
         """Test explicit description overrides docstring."""
 
         @asset_check(asset="test", description="Explicit description")
-        def check_with_override(data):
+        def check_with_override(_data):
             """Docstring description."""
             return True
 
@@ -740,7 +740,7 @@ class TestCheckRegistry:
         """Test clearing the check registry."""
 
         @asset_check(asset="test")
-        def check_a(data):
+        def check_a(_data):
             return True
 
         assert len(get_check_registry()) == 1
@@ -759,12 +759,12 @@ class TestCheckRegistry:
         """Test running all checks for an asset."""
 
         @asset_check(asset="products", name="check_positive_price")
-        def check_price(data):
+        def check_price(_data):
             # Always pass for this test
             return True
 
         @asset_check(asset="products", name="check_has_name")
-        def check_name(data):
+        def check_name(_data):
             return True
 
         data = {"price": [10, 20], "name": ["A", "B"]}
@@ -820,7 +820,7 @@ class TestCheckResult:
         """Test that check duration is tracked."""
 
         @asset_check(asset="test")
-        def slow_check(data):
+        def slow_check(_data):
             import time
 
             time.sleep(0.01)  # 10ms
@@ -840,7 +840,7 @@ class TestErrorHandling:
         """Test CheckExecutionError is raised properly."""
 
         @asset_check(asset="test")
-        def error_check(data):
+        def error_check(_data):
             raise RuntimeError("Database connection failed")
 
         with pytest.raises(CheckExecutionError) as exc:
@@ -853,7 +853,7 @@ class TestErrorHandling:
         """Test that invalid return types raise error."""
 
         @asset_check(asset="test")
-        def bad_return_check(data):
+        def bad_return_check(_data):
             return "invalid"  # Not bool or CheckResult
 
         with pytest.raises(ServoValidationError):

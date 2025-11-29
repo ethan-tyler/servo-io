@@ -9,14 +9,11 @@ use std::time::Duration;
 async fn timeout_wrapper_cancels_slow_operations() {
     let start = std::time::Instant::now();
 
-    let result = tokio::time::timeout(
-        Duration::from_millis(50),
-        async {
-            // Simulate a slow operation
-            tokio::time::sleep(Duration::from_secs(10)).await;
-            "completed"
-        },
-    )
+    let result = tokio::time::timeout(Duration::from_millis(50), async {
+        // Simulate a slow operation
+        tokio::time::sleep(Duration::from_secs(10)).await;
+        "completed"
+    })
     .await;
 
     let elapsed = start.elapsed();
@@ -32,13 +29,10 @@ async fn timeout_wrapper_cancels_slow_operations() {
 
 #[tokio::test]
 async fn timeout_allows_fast_operations() {
-    let result = tokio::time::timeout(
-        Duration::from_secs(1),
-        async {
-            tokio::time::sleep(Duration::from_millis(10)).await;
-            "completed"
-        },
-    )
+    let result = tokio::time::timeout(Duration::from_secs(1), async {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        "completed"
+    })
     .await;
 
     assert!(result.is_ok());
@@ -48,21 +42,15 @@ async fn timeout_allows_fast_operations() {
 #[tokio::test]
 async fn timeout_propagates_result() {
     // Success case
-    let result: Result<Result<i32, &str>, _> = tokio::time::timeout(
-        Duration::from_secs(1),
-        async { Ok(42) },
-    )
-    .await;
+    let result: Result<Result<i32, &str>, _> =
+        tokio::time::timeout(Duration::from_secs(1), async { Ok(42) }).await;
 
     assert!(result.is_ok());
     assert_eq!(result.unwrap().unwrap(), 42);
 
     // Error case
-    let result: Result<Result<i32, &str>, _> = tokio::time::timeout(
-        Duration::from_secs(1),
-        async { Err("error") },
-    )
-    .await;
+    let result: Result<Result<i32, &str>, _> =
+        tokio::time::timeout(Duration::from_secs(1), async { Err("error") }).await;
 
     assert!(result.is_ok());
     assert_eq!(result.unwrap().unwrap_err(), "error");
@@ -74,13 +62,10 @@ async fn nested_timeouts_respect_inner() {
 
     let result = tokio::time::timeout(
         Duration::from_secs(5),
-        tokio::time::timeout(
-            Duration::from_millis(50),
-            async {
-                tokio::time::sleep(Duration::from_secs(10)).await;
-                "completed"
-            },
-        ),
+        tokio::time::timeout(Duration::from_millis(50), async {
+            tokio::time::sleep(Duration::from_secs(10)).await;
+            "completed"
+        }),
     )
     .await;
 
@@ -139,31 +124,30 @@ async fn deadline_enforcement_with_select() {
 
 #[tokio::test]
 async fn cancellation_safety() {
-    use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
 
     let cleanup_ran = Arc::new(AtomicBool::new(false));
     let cleanup_clone = cleanup_ran.clone();
 
-    let result = tokio::time::timeout(
-        Duration::from_millis(50),
-        async move {
-            // Simulate long operation with cleanup
-            struct Guard {
-                flag: Arc<AtomicBool>,
-            }
+    let result = tokio::time::timeout(Duration::from_millis(50), async move {
+        // Simulate long operation with cleanup
+        struct Guard {
+            flag: Arc<AtomicBool>,
+        }
 
-            impl Drop for Guard {
-                fn drop(&mut self) {
-                    self.flag.store(true, Ordering::SeqCst);
-                }
+        impl Drop for Guard {
+            fn drop(&mut self) {
+                self.flag.store(true, Ordering::SeqCst);
             }
+        }
 
-            let _guard = Guard { flag: cleanup_clone };
-            tokio::time::sleep(Duration::from_secs(10)).await;
-            "completed"
-        },
-    )
+        let _guard = Guard {
+            flag: cleanup_clone,
+        };
+        tokio::time::sleep(Duration::from_secs(10)).await;
+        "completed"
+    })
     .await;
 
     // Timeout occurred

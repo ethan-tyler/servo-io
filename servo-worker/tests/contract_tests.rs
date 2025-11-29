@@ -19,7 +19,8 @@ use uuid::Uuid;
 /// Helper to compute HMAC-SHA256 signature
 fn compute_signature(payload: &[u8], secret: &str) -> String {
     type HmacSha256 = Hmac<Sha256>;
-    let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).expect("HMAC can take key of any size");
+    let mut mac =
+        HmacSha256::new_from_slice(secret.as_bytes()).expect("HMAC can take key of any size");
     mac.update(payload);
     let result = mac.finalize();
     hex::encode(result.into_bytes())
@@ -53,10 +54,16 @@ mod task_payload_contract {
         let payload = create_task_payload();
 
         // Verify required fields exist
-        assert!(payload.get("execution_id").is_some(), "execution_id required");
+        assert!(
+            payload.get("execution_id").is_some(),
+            "execution_id required"
+        );
         assert!(payload.get("workflow_id").is_some(), "workflow_id required");
         assert!(payload.get("tenant_id").is_some(), "tenant_id required");
-        assert!(payload.get("execution_plan").is_some(), "execution_plan required");
+        assert!(
+            payload.get("execution_plan").is_some(),
+            "execution_plan required"
+        );
     }
 
     #[test]
@@ -133,7 +140,10 @@ mod signature_contract {
         let (_body, signature) = sign_payload(&payload, TEST_SECRET);
 
         // Verify it's valid hex
-        assert!(hex::decode(&signature).is_ok(), "signature must be valid hex");
+        assert!(
+            hex::decode(&signature).is_ok(),
+            "signature must be valid hex"
+        );
 
         // Verify length (SHA256 = 32 bytes = 64 hex chars)
         assert_eq!(signature.len(), 64, "signature must be 64 hex characters");
@@ -338,7 +348,11 @@ http_requests_total{method="POST",status="200"} 567
                 continue;
             }
             // Should contain metric name and value
-            assert!(line.contains(' '), "Metrics line should have name and value: {}", line);
+            assert!(
+                line.contains(' '),
+                "Metrics line should have name and value: {}",
+                line
+            );
         }
     }
 }
@@ -424,6 +438,9 @@ mod trace_context_contract {
     fn tracestate_header_is_optional() {
         // tracestate is optional - can be empty or have vendor data
         let tracestate = "congo=t61rcWkgMzE";
-        assert!(tracestate.contains('='), "tracestate should have key=value format");
+        assert!(
+            tracestate.contains('='),
+            "tracestate should have key=value format"
+        );
     }
 }

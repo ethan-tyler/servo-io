@@ -40,8 +40,8 @@ fn create_test_payload() -> TaskPayload {
 /// Compute HMAC-SHA256 signature (matching signing.rs)
 fn sign_payload(payload: &[u8], secret: &str) -> String {
     type HmacSha256 = Hmac<Sha256>;
-    let mut mac = HmacSha256::new_from_slice(secret.as_bytes())
-        .expect("HMAC can take key of any size");
+    let mut mac =
+        HmacSha256::new_from_slice(secret.as_bytes()).expect("HMAC can take key of any size");
     mac.update(payload);
     let signature = mac.finalize().into_bytes();
     hex::encode(signature)
@@ -60,7 +60,10 @@ mod task_payload_contract {
         assert!(parsed.get("execution_id").is_some(), "missing execution_id");
         assert!(parsed.get("workflow_id").is_some(), "missing workflow_id");
         assert!(parsed.get("tenant_id").is_some(), "missing tenant_id");
-        assert!(parsed.get("execution_plan").is_some(), "missing execution_plan");
+        assert!(
+            parsed.get("execution_plan").is_some(),
+            "missing execution_plan"
+        );
         // idempotency_key can be null or absent
     }
 
@@ -176,7 +179,10 @@ mod signature_contract {
         let signature1 = sign_payload(&json_bytes, TEST_SECRET);
         let signature2 = sign_payload(&json_bytes, TEST_SECRET);
 
-        assert_eq!(signature1, signature2, "same input should produce same signature");
+        assert_eq!(
+            signature1, signature2,
+            "same input should produce same signature"
+        );
     }
 
     #[test]

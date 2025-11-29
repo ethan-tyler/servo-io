@@ -447,7 +447,9 @@ impl WorkflowExecutor {
             self.storage
                 .create_check_results_batch(&results, tenant_id)
                 .await
-                .map_err(|e| ExecutionError::Storage(format!("Failed to store check results: {}", e)))?;
+                .map_err(|e| {
+                    ExecutionError::Storage(format!("Failed to store check results: {}", e))
+                })?;
 
             let duration_secs = timer.elapsed_secs();
             let passed = results.iter().filter(|r| r.outcome == "passed").count();

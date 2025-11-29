@@ -33,7 +33,9 @@ mod test_secrets {
     use servo_worker::secrets_provider::{SecretsError, SecretsProvider};
 
     /// Create a test secrets provider with a fixed HMAC secret
-    pub async fn create_test_secrets_provider(hmac_secret: &str) -> Result<SecretsProvider, SecretsError> {
+    pub async fn create_test_secrets_provider(
+        hmac_secret: &str,
+    ) -> Result<SecretsProvider, SecretsError> {
         // Set the environment variable for testing
         std::env::set_var("SERVO_HMAC_SECRET", hmac_secret);
         // Force development mode which uses env vars
