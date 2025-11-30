@@ -95,3 +95,46 @@ pub struct CheckResultModel {
     pub metadata: Option<sqlx::types::Json<serde_json::Value>>,
     pub tenant_id: Option<String>,
 }
+
+/// Backfill job model for managing partition backfill operations
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct BackfillJobModel {
+    pub id: Uuid,
+    pub tenant_id: String,
+    pub asset_id: Uuid,
+    pub asset_name: String,
+    pub idempotency_key: String,
+    pub state: String,
+    pub execution_strategy: sqlx::types::Json<serde_json::Value>,
+    pub partition_start: Option<String>,
+    pub partition_end: Option<String>,
+    pub partition_keys: sqlx::types::Json<Vec<String>>,
+    pub total_partitions: i32,
+    pub completed_partitions: i32,
+    pub failed_partitions: i32,
+    pub skipped_partitions: i32,
+    pub include_upstream: bool,
+    pub error_message: Option<String>,
+    pub created_by: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub started_at: Option<DateTime<Utc>>,
+    pub completed_at: Option<DateTime<Utc>>,
+    pub heartbeat_at: Option<DateTime<Utc>>,
+    pub version: i32,
+}
+
+/// Backfill partition model for tracking individual partition execution
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct BackfillPartitionModel {
+    pub id: Uuid,
+    pub backfill_job_id: Uuid,
+    pub partition_key: String,
+    pub state: String,
+    pub attempt_count: i32,
+    pub execution_id: Option<Uuid>,
+    pub error_message: Option<String>,
+    pub duration_ms: Option<i64>,
+    pub started_at: Option<DateTime<Utc>>,
+    pub completed_at: Option<DateTime<Utc>>,
+    pub tenant_id: String,
+}
