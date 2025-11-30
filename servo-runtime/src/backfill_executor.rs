@@ -145,6 +145,23 @@ impl BackfillExecutor {
 
         // Process partitions using atomic claiming
         loop {
+            // Check if job was cancelled before processing next partition
+            let is_cancelled = self
+                .storage
+                .is_backfill_job_cancelled(job.id, &self.tenant_id)
+                .await
+                .map_err(|e| crate::Error::Internal(e.to_string()))?;
+
+            if is_cancelled {
+                info!(
+                    job_id = %job.id,
+                    completed = completed_count,
+                    "Job cancelled, stopping partition processing"
+                );
+                // Job is already in cancelled state, just return
+                return Ok(());
+            }
+
             // Update heartbeat before claiming next partition
             self.update_heartbeat(job.id).await?;
 
