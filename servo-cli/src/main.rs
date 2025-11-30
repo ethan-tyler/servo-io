@@ -99,14 +99,23 @@ enum Commands {
 
 #[derive(Subcommand)]
 enum BackfillAction {
-    /// Trigger a backfill for a specific partition
+    /// Trigger a backfill for a specific partition or date range
     Start {
         /// Asset name to backfill
         asset: String,
 
-        /// Partition key to backfill (e.g., "2024-01-15")
-        #[arg(long)]
-        partition: String,
+        /// Single partition key to backfill (e.g., "2024-01-15")
+        /// Use this OR --start/--end for a range
+        #[arg(long, conflicts_with_all = ["start", "end"])]
+        partition: Option<String>,
+
+        /// Start date for range backfill (YYYY-MM-DD format)
+        #[arg(long, requires = "end")]
+        start: Option<String>,
+
+        /// End date for range backfill (YYYY-MM-DD format, inclusive)
+        #[arg(long, requires = "start")]
+        end: Option<String>,
     },
 
     /// List backfill jobs
@@ -201,9 +210,30 @@ async fn main() -> anyhow::Result<()> {
                 .ok_or_else(|| anyhow::anyhow!("DATABASE_URL not set"))?;
 
             match action {
-                BackfillAction::Start { asset, partition } => {
-                    commands::backfill::execute_single_partition(&asset, &partition, &database_url)
-                        .await?;
+                BackfillAction::Start {
+                    asset,
+                    partition,
+                    start,
+                    end,
+                } => {
+                    match (partition, start, end) {
+                        (Some(p), None, None) => {
+                            // Single partition mode
+                            commands::backfill::execute_single_partition(&asset, &p, &database_url)
+                                .await?;
+                        }
+                        (None, Some(s), Some(e)) => {
+                            // Range mode
+                            commands::backfill::execute_range_backfill(&asset, &s, &e, &database_url)
+                                .await?;
+                        }
+                        _ => {
+                            anyhow::bail!(
+                                "Must specify either --partition for single partition \
+                                 or --start and --end for date range backfill"
+                            );
+                        }
+                    }
                 }
                 BackfillAction::List { status } => {
                     commands::backfill::list_jobs(status.as_deref(), &database_url).await?;
