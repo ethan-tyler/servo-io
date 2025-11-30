@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1764466618426,
+  "lastUpdate": 1764472494283,
   "repoUrl": "https://github.com/ethan-tyler/servo-io",
   "entries": {
     "Rust Benchmark": [
@@ -527,6 +527,282 @@ window.BENCHMARK_DATA = {
             "name": "graph_operations/add_single_node",
             "value": 550,
             "range": "± 8",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "graph_operations/add_edge",
+            "value": 83,
+            "range": "± 2",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "graph_operations/node_count/100",
+            "value": 0,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "graph_operations/node_count/1000",
+            "value": 0,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "graph_operations/node_count/10000",
+            "value": 0,
+            "range": "± 0",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "ethan@urbanskitech.com",
+            "name": "Ethan Urbanski",
+            "username": "ethan-tyler"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "edec044997d17ce4b955707d2911c267a6606a71",
+          "message": "feat(backfill): Phase 5A Increment 1 - Single Partition Backfill CLI (#42)\n\n* feat(quality): add referential integrity and schema match checks (Phase 5C)\n\nImplement two deferred check types to achieve full Python SDK parity:\n\n- Add referential_integrity check for foreign key validation\n  - Supports all 3 API patterns (decorator, fluent, stacked)\n  - Validates column values exist in reference data\n\n- Add schema_match check for column validation\n  - Validates expected columns exist\n  - Supports allow_extra_columns option\n  - Auto-detects pandas/polars column types\n\n- Add SchemaColumn dataclass and type mappings\n- Add helper functions for column value/schema extraction\n- Extend CheckDefinition.to_rust_check_type() for new checks\n- Add comprehensive unit tests (18 new test cases)\n- Add integration tests for Rust schema generation\n\n* feat(partitions): add advanced partitioning support (Phase 5B)\n\nImplement Dagster-compatible partition definitions for multi-dimensional,\ntime-based, static, and dynamic partitioning.\n\nPartition Types:\n- DailyPartition, HourlyPartition, WeeklyPartition, MonthlyPartition\n- StaticPartition for fixed key lists (e.g., regions)\n- DynamicPartition for runtime-discovered keys\n- MultiPartition for multi-dimensional Cartesian products\n\nPartition Mappings:\n- IdentityMapping for 1:1 upstream/downstream mapping\n- TimeWindowMapping for time-based aggregations (e.g., daily -> weekly)\n- AllUpstreamMapping for full history dependencies\n- DimensionMapping for multi-partition dimension remapping\n\nIntegration:\n- Added partition and partition_mappings parameters to @asset decorator\n- Extended AssetDefinition with partition metadata\n- Added PartitionContext for partition-aware execution\n- Added serialization/deserialization utilities\n\nTests:\n- Comprehensive unit tests for all partition types (53 new tests)\n- Mapping resolution tests\n- Serialization round-trip tests\n\n* feat(worker): add referential_integrity and schema_match check validators\n\nAdd backend validation support for two check types from the Python SDK:\n\n- ReferentialIntegrity: validates foreign key references exist\n  - Supports in-memory validation when reference data is provided\n  - Gracefully handles server-side registration when no reference data\n  - Skips null values by default\n\n- SchemaMatch: validates expected columns are present\n  - Supports allow_extra_columns option\n  - Reports missing and unexpected columns\n\nThis ensures the Rust worker can properly validate checks registered\nvia the Python SDK's check.referential_integrity() and check.schema_match()\ndecorators.\n\nTests: 28 passing check_validator tests including new coverage for both types\n\n* docs(partitions): clarify SDK-only status for partitioning feature\n\nAdd note to module docstring explaining that partitioning is currently\navailable for asset definition and metadata purposes only. Full runtime\nand scheduler support for partition-aware execution is planned for a\nfuture release.\n\n* style: fix formatting issues in Python and Rust files\n\nApply automatic formatting:\n- cargo fmt for Rust files\n- ruff format for Python files\n\n* feat(backfill): add single partition backfill CLI command (Phase 5A Increment 1)\n\nImplement the foundation for intelligent backfill operations:\n\nDatabase:\n- Add migration 007 with backfill_jobs and backfill_partitions tables\n- Include RLS policies for multi-tenant isolation\n- Add indexes for efficient job and partition queries\n\nStorage:\n- Add BackfillJobModel and BackfillPartitionModel types\n- Implement CRUD operations with tenant context\n- Add validation for backfill and partition states\n- Support idempotency key lookups\n\nCLI:\n- Add `servo backfill start <asset> --partition <key>` command\n- Add `servo backfill list [--status <state>]` for job listing\n- Add `servo backfill status <job_id>` for detailed status\n\nTests:\n- Unit tests for model creation and idempotency key format\n- Integration tests follow existing RLS-enforced patterns\n\n* fix(backfill): address review feedback for safety and validation\n\nBased on code review, this commit addresses key gaps:\n\nSafety & Validation:\n- Add partition key format validation (YYYY-MM-DD, YYYY-MM-DDTHH)\n- Reject empty, whitespace-only, or overly long partition keys\n- Check for existing active backfills to prevent duplicates\n- Add find_active_backfill_for_partition() DAL function\n\nState Machine Enforcement:\n- Add validate_backfill_state_transition() with allowed transitions:\n  pending -> running, cancelled\n  running -> completed, failed, cancelled\n- Add transition_backfill_job_state() with atomic state updates\n\nExecution Clarity:\n- Make explicit that this increment is CRUD + CLI only\n- Jobs remain in \"pending\" state (execution not yet wired)\n- Add warning when job is created about pending status\n\nTests:\n- Add 9 new partition key validation tests\n- Add 2 state transition validation tests\n- Total: 14 backfill-related tests now pass",
+          "timestamp": "2025-11-29T22:03:53-05:00",
+          "tree_id": "53f4068369630c3b8464cefde7f34ee0cd02c362",
+          "url": "https://github.com/ethan-tyler/servo-io/commit/edec044997d17ce4b955707d2911c267a6606a71"
+        },
+        "date": 1764472493699,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "graph_construction/chain/10",
+            "value": 6226,
+            "range": "± 67",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "graph_construction/fan_out/10",
+            "value": 6909,
+            "range": "± 39",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "graph_construction/chain/100",
+            "value": 66592,
+            "range": "± 387",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "graph_construction/fan_out/100",
+            "value": 67714,
+            "range": "± 1789",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "graph_construction/chain/1000",
+            "value": 671279,
+            "range": "± 5974",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "graph_construction/fan_out/1000",
+            "value": 672888,
+            "range": "± 3718",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "upstream_queries/chain_last_node/10",
+            "value": 43,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "upstream_queries/chain_mid_node/10",
+            "value": 43,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "upstream_queries/chain_last_node/100",
+            "value": 45,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "upstream_queries/chain_mid_node/100",
+            "value": 43,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "upstream_queries/chain_last_node/500",
+            "value": 43,
+            "range": "± 1",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "upstream_queries/chain_mid_node/500",
+            "value": 45,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "upstream_queries/single_upstream/10",
+            "value": 45,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "upstream_queries/single_upstream/100",
+            "value": 43,
+            "range": "± 1",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "upstream_queries/single_upstream/500",
+            "value": 43,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "downstream_queries/fan_out/10",
+            "value": 118,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "downstream_queries/fan_out/100",
+            "value": 466,
+            "range": "± 2",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "downstream_queries/fan_out/500",
+            "value": 1756,
+            "range": "± 56",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "downstream_queries/chain_first/10",
+            "value": 44,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "downstream_queries/chain_first/100",
+            "value": 43,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "downstream_queries/chain_first/500",
+            "value": 43,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "cycle_detection/chain_no_cycle/10",
+            "value": 142,
+            "range": "± 5",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "cycle_detection/chain_no_cycle/100",
+            "value": 1260,
+            "range": "± 10",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "cycle_detection/chain_no_cycle/500",
+            "value": 6545,
+            "range": "± 19",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "cycle_detection/chain_no_cycle/1000",
+            "value": 13059,
+            "range": "± 74",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "cycle_detection/diamond_layers/3",
+            "value": 443,
+            "range": "± 1",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "cycle_detection/diamond_layers/5",
+            "value": 1010,
+            "range": "± 2",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "cycle_detection/diamond_layers/7",
+            "value": 1590,
+            "range": "± 29",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "impact_analysis/fan_out_source/10",
+            "value": 130,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "impact_analysis/fan_out_source/100",
+            "value": 466,
+            "range": "± 3",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "impact_analysis/fan_out_source/500",
+            "value": 1849,
+            "range": "± 17",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "impact_analysis/chain_first/10",
+            "value": 53,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "impact_analysis/chain_first/100",
+            "value": 53,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "impact_analysis/chain_first/500",
+            "value": 54,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "impact_analysis/diamond_source/3",
+            "value": 133,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "impact_analysis/diamond_source/5",
+            "value": 126,
+            "range": "± 2",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "impact_analysis/diamond_source/7",
+            "value": 142,
+            "range": "± 4",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "graph_operations/add_single_node",
+            "value": 536,
+            "range": "± 5",
             "unit": "ns/iter"
           },
           {
