@@ -128,8 +128,13 @@ pub async fn execute_single_partition(
 
     info!("Found asset: {} ({})", asset.name, asset.id);
 
+    // TODO: Validate that asset is partitioned and partition key matches the partitioning scheme
+    // This requires adding partition_scheme field to AssetModel (future enhancement)
+    // For now, we accept any partition key format for any asset
+
     // Check for existing active job on same asset/partition
     // This prevents duplicate backfills while one is still running
+    // Note: RLS ensures this check is tenant-scoped
     if let Some(active_job) = storage
         .find_active_backfill_for_partition(asset.id, &partition_key, &tenant_id)
         .await?
@@ -255,8 +260,13 @@ pub async fn execute_range_backfill(
 
     info!("Found asset: {} ({})", asset.name, asset.id);
 
+    // TODO: Validate that asset is partitioned and date range matches the partitioning scheme
+    // This requires adding partition_scheme field to AssetModel (future enhancement)
+    // For now, we accept any date range for any asset
+
     // Check for overlapping active jobs
     // We check if any partition in our range is already being backfilled
+    // Note: RLS ensures this check is tenant-scoped
     for pk in &partition_keys {
         if let Some(active_job) = storage
             .find_active_backfill_for_partition(asset.id, pk, &tenant_id)
