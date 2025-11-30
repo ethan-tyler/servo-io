@@ -1,6 +1,7 @@
 //! PostgreSQL storage implementation
 
 use crate::{models::*, Result, TenantId};
+use chrono::Utc;
 use futures::future::BoxFuture;
 use sqlx::{postgres::PgPoolOptions, PgPool, Postgres, Transaction};
 use std::time::Instant;
@@ -1807,6 +1808,705 @@ impl PostgresStorage {
         .await
     }
 
+    // ========== Backfill Job Operations ==========
+
+    /// Validate backfill job state
+    fn validate_backfill_state(state: &str) -> Result<()> {
+        match state {
+            "pending" | "running" | "completed" | "failed" | "cancelled" => Ok(()),
+            _ => Err(crate::Error::ValidationError(format!(
+                "Invalid backfill state: {}",
+                state
+            ))),
+        }
+    }
+
+    /// Validate backfill partition state
+    fn validate_partition_state(state: &str) -> Result<()> {
+        match state {
+            "pending" | "running" | "completed" | "failed" | "skipped" => Ok(()),
+            _ => Err(crate::Error::ValidationError(format!(
+                "Invalid partition state: {}",
+                state
+            ))),
+        }
+    }
+
+    /// Create a new backfill job
+    #[instrument(
+        skip(self, job, tenant_id),
+        fields(
+            db.system = "postgresql",
+            db.operation = "INSERT",
+            db.sql.table = "backfill_jobs",
+            tenant_id = %tenant_id.as_str(),
+            backfill_job_id = %job.id
+        )
+    )]
+    pub async fn create_backfill_job(
+        &self,
+        job: &BackfillJobModel,
+        tenant_id: &TenantId,
+    ) -> Result<()> {
+        Self::validate_non_empty_string(&job.asset_name, "Asset name")?;
+        Self::validate_non_empty_string(&job.idempotency_key, "Idempotency key")?;
+        Self::validate_backfill_state(&job.state)?;
+
+        let job = job.clone();
+
+        self.with_tenant_context(tenant_id, |tx| {
+            Box::pin(async move {
+                sqlx::query(
+                    r#"
+                    INSERT INTO backfill_jobs (
+                        id, tenant_id, asset_id, asset_name, idempotency_key, state,
+                        execution_strategy, partition_start, partition_end, partition_keys,
+                        total_partitions, completed_partitions, failed_partitions, skipped_partitions,
+                        include_upstream, error_message, created_by, created_at, started_at,
+                        completed_at, heartbeat_at, version
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
+                    "#,
+                )
+                .bind(job.id)
+                .bind(&job.tenant_id)
+                .bind(job.asset_id)
+                .bind(&job.asset_name)
+                .bind(&job.idempotency_key)
+                .bind(&job.state)
+                .bind(&job.execution_strategy)
+                .bind(&job.partition_start)
+                .bind(&job.partition_end)
+                .bind(&job.partition_keys)
+                .bind(job.total_partitions)
+                .bind(job.completed_partitions)
+                .bind(job.failed_partitions)
+                .bind(job.skipped_partitions)
+                .bind(job.include_upstream)
+                .bind(&job.error_message)
+                .bind(&job.created_by)
+                .bind(job.created_at)
+                .bind(job.started_at)
+                .bind(job.completed_at)
+                .bind(job.heartbeat_at)
+                .bind(job.version)
+                .execute(&mut **tx)
+                .await
+                .map_err(map_db_error)?;
+
+                Ok(())
+            })
+        })
+        .await
+    }
+
+    /// Get a backfill job by ID
+    #[instrument(
+        skip(self, tenant_id),
+        fields(
+            db.system = "postgresql",
+            db.operation = "SELECT",
+            db.sql.table = "backfill_jobs",
+            tenant_id = %tenant_id.as_str(),
+            backfill_job_id = %id
+        )
+    )]
+    pub async fn get_backfill_job(
+        &self,
+        id: Uuid,
+        tenant_id: &TenantId,
+    ) -> Result<BackfillJobModel> {
+        self.with_tenant_context(tenant_id, |tx| {
+            Box::pin(async move {
+                let job = sqlx::query_as::<_, BackfillJobModel>(
+                    r#"
+                    SELECT id, tenant_id, asset_id, asset_name, idempotency_key, state,
+                           execution_strategy, partition_start, partition_end, partition_keys,
+                           total_partitions, completed_partitions, failed_partitions, skipped_partitions,
+                           include_upstream, error_message, created_by, created_at, started_at,
+                           completed_at, heartbeat_at, version
+                    FROM backfill_jobs
+                    WHERE id = $1
+                    "#,
+                )
+                .bind(id)
+                .fetch_optional(&mut **tx)
+                .await
+                .map_err(map_db_error)?
+                .ok_or_else(|| crate::Error::NotFound(format!("Backfill job {}", id)))?;
+
+                Ok(job)
+            })
+        })
+        .await
+    }
+
+    /// Update a backfill job
+    #[instrument(
+        skip(self, job, tenant_id),
+        fields(
+            db.system = "postgresql",
+            db.operation = "UPDATE",
+            db.sql.table = "backfill_jobs",
+            tenant_id = %tenant_id.as_str(),
+            backfill_job_id = %job.id
+        )
+    )]
+    pub async fn update_backfill_job(
+        &self,
+        job: &BackfillJobModel,
+        tenant_id: &TenantId,
+    ) -> Result<()> {
+        Self::validate_backfill_state(&job.state)?;
+
+        let job = job.clone();
+
+        self.with_tenant_context(tenant_id, |tx| {
+            Box::pin(async move {
+                let result = sqlx::query(
+                    r#"
+                    UPDATE backfill_jobs
+                    SET state = $1, completed_partitions = $2, failed_partitions = $3,
+                        skipped_partitions = $4, error_message = $5, started_at = $6,
+                        completed_at = $7, heartbeat_at = $8, version = version + 1
+                    WHERE id = $9 AND version = $10
+                    "#,
+                )
+                .bind(&job.state)
+                .bind(job.completed_partitions)
+                .bind(job.failed_partitions)
+                .bind(job.skipped_partitions)
+                .bind(&job.error_message)
+                .bind(job.started_at)
+                .bind(job.completed_at)
+                .bind(job.heartbeat_at)
+                .bind(job.id)
+                .bind(job.version)
+                .execute(&mut **tx)
+                .await
+                .map_err(map_db_error)?;
+
+                if result.rows_affected() == 0 {
+                    return Err(crate::Error::NotFound(format!(
+                        "Backfill job {} (version {})",
+                        job.id, job.version
+                    )));
+                }
+
+                Ok(())
+            })
+        })
+        .await
+    }
+
+    /// List backfill jobs with optional state filter
+    #[instrument(
+        skip(self, tenant_id),
+        fields(
+            db.system = "postgresql",
+            db.operation = "SELECT",
+            db.sql.table = "backfill_jobs",
+            tenant_id = %tenant_id.as_str()
+        )
+    )]
+    pub async fn list_backfill_jobs(
+        &self,
+        tenant_id: &TenantId,
+        state_filter: Option<&str>,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<BackfillJobModel>> {
+        Self::validate_pagination_params(limit, offset)?;
+        if let Some(state) = state_filter {
+            Self::validate_backfill_state(state)?;
+        }
+
+        let state_filter = state_filter.map(|s| s.to_string());
+
+        self.with_tenant_context(tenant_id, |tx| {
+            Box::pin(async move {
+                let jobs = if let Some(state) = state_filter {
+                    sqlx::query_as::<_, BackfillJobModel>(
+                        r#"
+                        SELECT id, tenant_id, asset_id, asset_name, idempotency_key, state,
+                               execution_strategy, partition_start, partition_end, partition_keys,
+                               total_partitions, completed_partitions, failed_partitions, skipped_partitions,
+                               include_upstream, error_message, created_by, created_at, started_at,
+                               completed_at, heartbeat_at, version
+                        FROM backfill_jobs
+                        WHERE state = $1
+                        ORDER BY created_at DESC
+                        LIMIT $2 OFFSET $3
+                        "#,
+                    )
+                    .bind(&state)
+                    .bind(limit)
+                    .bind(offset)
+                    .fetch_all(&mut **tx)
+                    .await
+                    .map_err(map_db_error)?
+                } else {
+                    sqlx::query_as::<_, BackfillJobModel>(
+                        r#"
+                        SELECT id, tenant_id, asset_id, asset_name, idempotency_key, state,
+                               execution_strategy, partition_start, partition_end, partition_keys,
+                               total_partitions, completed_partitions, failed_partitions, skipped_partitions,
+                               include_upstream, error_message, created_by, created_at, started_at,
+                               completed_at, heartbeat_at, version
+                        FROM backfill_jobs
+                        ORDER BY created_at DESC
+                        LIMIT $1 OFFSET $2
+                        "#,
+                    )
+                    .bind(limit)
+                    .bind(offset)
+                    .fetch_all(&mut **tx)
+                    .await
+                    .map_err(map_db_error)?
+                };
+
+                Ok(jobs)
+            })
+        })
+        .await
+    }
+
+    /// Create a backfill partition
+    #[instrument(
+        skip(self, partition, tenant_id),
+        fields(
+            db.system = "postgresql",
+            db.operation = "INSERT",
+            db.sql.table = "backfill_partitions",
+            tenant_id = %tenant_id.as_str(),
+            partition_id = %partition.id
+        )
+    )]
+    pub async fn create_backfill_partition(
+        &self,
+        partition: &BackfillPartitionModel,
+        tenant_id: &TenantId,
+    ) -> Result<()> {
+        Self::validate_non_empty_string(&partition.partition_key, "Partition key")?;
+        Self::validate_partition_state(&partition.state)?;
+
+        let partition = partition.clone();
+
+        self.with_tenant_context(tenant_id, |tx| {
+            Box::pin(async move {
+                sqlx::query(
+                    r#"
+                    INSERT INTO backfill_partitions (
+                        id, backfill_job_id, partition_key, state, attempt_count,
+                        execution_id, error_message, duration_ms, started_at, completed_at, tenant_id
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                    "#,
+                )
+                .bind(partition.id)
+                .bind(partition.backfill_job_id)
+                .bind(&partition.partition_key)
+                .bind(&partition.state)
+                .bind(partition.attempt_count)
+                .bind(partition.execution_id)
+                .bind(&partition.error_message)
+                .bind(partition.duration_ms)
+                .bind(partition.started_at)
+                .bind(partition.completed_at)
+                .bind(&partition.tenant_id)
+                .execute(&mut **tx)
+                .await
+                .map_err(map_db_error)?;
+
+                Ok(())
+            })
+        })
+        .await
+    }
+
+    /// Create multiple backfill partitions in a batch
+    #[instrument(
+        skip(self, partitions, tenant_id),
+        fields(
+            db.system = "postgresql",
+            db.operation = "INSERT",
+            db.sql.table = "backfill_partitions",
+            tenant_id = %tenant_id.as_str(),
+            batch_size = partitions.len()
+        )
+    )]
+    pub async fn create_backfill_partitions_batch(
+        &self,
+        partitions: &[BackfillPartitionModel],
+        tenant_id: &TenantId,
+    ) -> Result<()> {
+        if partitions.is_empty() {
+            return Ok(());
+        }
+
+        for partition in partitions {
+            Self::validate_non_empty_string(&partition.partition_key, "Partition key")?;
+            Self::validate_partition_state(&partition.state)?;
+        }
+
+        let partitions = partitions.to_vec();
+
+        self.with_tenant_context(tenant_id, |tx| {
+            Box::pin(async move {
+                for partition in partitions {
+                    sqlx::query(
+                        r#"
+                        INSERT INTO backfill_partitions (
+                            id, backfill_job_id, partition_key, state, attempt_count,
+                            execution_id, error_message, duration_ms, started_at, completed_at, tenant_id
+                        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                        "#,
+                    )
+                    .bind(partition.id)
+                    .bind(partition.backfill_job_id)
+                    .bind(&partition.partition_key)
+                    .bind(&partition.state)
+                    .bind(partition.attempt_count)
+                    .bind(partition.execution_id)
+                    .bind(&partition.error_message)
+                    .bind(partition.duration_ms)
+                    .bind(partition.started_at)
+                    .bind(partition.completed_at)
+                    .bind(&partition.tenant_id)
+                    .execute(&mut **tx)
+                    .await
+                    .map_err(map_db_error)?;
+                }
+
+                Ok(())
+            })
+        })
+        .await
+    }
+
+    /// Update a backfill partition
+    #[instrument(
+        skip(self, partition, tenant_id),
+        fields(
+            db.system = "postgresql",
+            db.operation = "UPDATE",
+            db.sql.table = "backfill_partitions",
+            tenant_id = %tenant_id.as_str(),
+            partition_id = %partition.id
+        )
+    )]
+    pub async fn update_backfill_partition(
+        &self,
+        partition: &BackfillPartitionModel,
+        tenant_id: &TenantId,
+    ) -> Result<()> {
+        Self::validate_partition_state(&partition.state)?;
+
+        let partition = partition.clone();
+
+        self.with_tenant_context(tenant_id, |tx| {
+            Box::pin(async move {
+                let result = sqlx::query(
+                    r#"
+                    UPDATE backfill_partitions
+                    SET state = $1, attempt_count = $2, execution_id = $3,
+                        error_message = $4, duration_ms = $5, started_at = $6, completed_at = $7
+                    WHERE id = $8
+                    "#,
+                )
+                .bind(&partition.state)
+                .bind(partition.attempt_count)
+                .bind(partition.execution_id)
+                .bind(&partition.error_message)
+                .bind(partition.duration_ms)
+                .bind(partition.started_at)
+                .bind(partition.completed_at)
+                .bind(partition.id)
+                .execute(&mut **tx)
+                .await
+                .map_err(map_db_error)?;
+
+                if result.rows_affected() == 0 {
+                    return Err(crate::Error::NotFound(format!(
+                        "Backfill partition {}",
+                        partition.id
+                    )));
+                }
+
+                Ok(())
+            })
+        })
+        .await
+    }
+
+    /// List partitions for a backfill job
+    #[instrument(
+        skip(self, tenant_id),
+        fields(
+            db.system = "postgresql",
+            db.operation = "SELECT",
+            db.sql.table = "backfill_partitions",
+            tenant_id = %tenant_id.as_str(),
+            backfill_job_id = %backfill_job_id
+        )
+    )]
+    pub async fn list_backfill_partitions(
+        &self,
+        backfill_job_id: Uuid,
+        tenant_id: &TenantId,
+    ) -> Result<Vec<BackfillPartitionModel>> {
+        self.with_tenant_context(tenant_id, |tx| {
+            Box::pin(async move {
+                let partitions = sqlx::query_as::<_, BackfillPartitionModel>(
+                    r#"
+                    SELECT id, backfill_job_id, partition_key, state, attempt_count,
+                           execution_id, error_message, duration_ms, started_at, completed_at, tenant_id
+                    FROM backfill_partitions
+                    WHERE backfill_job_id = $1
+                    ORDER BY partition_key ASC
+                    "#,
+                )
+                .bind(backfill_job_id)
+                .fetch_all(&mut **tx)
+                .await
+                .map_err(map_db_error)?;
+
+                Ok(partitions)
+            })
+        })
+        .await
+    }
+
+    /// Get failed partitions for a backfill job
+    #[instrument(
+        skip(self, tenant_id),
+        fields(
+            db.system = "postgresql",
+            db.operation = "SELECT",
+            db.sql.table = "backfill_partitions",
+            tenant_id = %tenant_id.as_str(),
+            backfill_job_id = %backfill_job_id
+        )
+    )]
+    pub async fn get_failed_backfill_partitions(
+        &self,
+        backfill_job_id: Uuid,
+        tenant_id: &TenantId,
+    ) -> Result<Vec<BackfillPartitionModel>> {
+        self.with_tenant_context(tenant_id, |tx| {
+            Box::pin(async move {
+                let partitions = sqlx::query_as::<_, BackfillPartitionModel>(
+                    r#"
+                    SELECT id, backfill_job_id, partition_key, state, attempt_count,
+                           execution_id, error_message, duration_ms, started_at, completed_at, tenant_id
+                    FROM backfill_partitions
+                    WHERE backfill_job_id = $1 AND state = 'failed'
+                    ORDER BY partition_key ASC
+                    "#,
+                )
+                .bind(backfill_job_id)
+                .fetch_all(&mut **tx)
+                .await
+                .map_err(map_db_error)?;
+
+                Ok(partitions)
+            })
+        })
+        .await
+    }
+
+    /// Find backfill job by idempotency key
+    #[instrument(
+        skip(self, tenant_id),
+        fields(
+            db.system = "postgresql",
+            db.operation = "SELECT",
+            db.sql.table = "backfill_jobs",
+            tenant_id = %tenant_id.as_str()
+        )
+    )]
+    pub async fn find_backfill_job_by_idempotency_key(
+        &self,
+        idempotency_key: &str,
+        tenant_id: &TenantId,
+    ) -> Result<Option<BackfillJobModel>> {
+        let idempotency_key = idempotency_key.to_string();
+
+        self.with_tenant_context(tenant_id, |tx| {
+            Box::pin(async move {
+                let job = sqlx::query_as::<_, BackfillJobModel>(
+                    r#"
+                    SELECT id, tenant_id, asset_id, asset_name, idempotency_key, state,
+                           execution_strategy, partition_start, partition_end, partition_keys,
+                           total_partitions, completed_partitions, failed_partitions, skipped_partitions,
+                           include_upstream, error_message, created_by, created_at, started_at,
+                           completed_at, heartbeat_at, version
+                    FROM backfill_jobs
+                    WHERE idempotency_key = $1
+                    "#,
+                )
+                .bind(&idempotency_key)
+                .fetch_optional(&mut **tx)
+                .await
+                .map_err(map_db_error)?;
+
+                Ok(job)
+            })
+        })
+        .await
+    }
+
+    /// Find an active (pending or running) backfill job for a specific asset/partition.
+    /// Used to prevent duplicate backfills while one is still active.
+    #[instrument(
+        skip(self, tenant_id),
+        fields(
+            db.system = "postgresql",
+            db.operation = "SELECT",
+            db.sql.table = "backfill_jobs",
+            tenant_id = %tenant_id.as_str(),
+            asset_id = %asset_id
+        )
+    )]
+    pub async fn find_active_backfill_for_partition(
+        &self,
+        asset_id: Uuid,
+        partition_key: &str,
+        tenant_id: &TenantId,
+    ) -> Result<Option<BackfillJobModel>> {
+        let partition_key = partition_key.to_string();
+
+        self.with_tenant_context(tenant_id, |tx| {
+            Box::pin(async move {
+                let job = sqlx::query_as::<_, BackfillJobModel>(
+                    r#"
+                    SELECT id, tenant_id, asset_id, asset_name, idempotency_key, state,
+                           execution_strategy, partition_start, partition_end, partition_keys,
+                           total_partitions, completed_partitions, failed_partitions, skipped_partitions,
+                           include_upstream, error_message, created_by, created_at, started_at,
+                           completed_at, heartbeat_at, version
+                    FROM backfill_jobs
+                    WHERE asset_id = $1
+                      AND state IN ('pending', 'running')
+                      AND partition_keys @> $2::jsonb
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                    "#,
+                )
+                .bind(asset_id)
+                .bind(serde_json::json!([partition_key]))
+                .fetch_optional(&mut **tx)
+                .await
+                .map_err(map_db_error)?;
+
+                Ok(job)
+            })
+        })
+        .await
+    }
+
+    /// Validate state transition for backfill jobs.
+    /// Allowed transitions:
+    ///   pending -> running, cancelled
+    ///   running -> completed, failed, cancelled
+    /// Returns error if transition is not allowed.
+    fn validate_backfill_state_transition(from: &str, to: &str) -> Result<()> {
+        let valid = matches!(
+            (from, to),
+            ("pending", "running")
+                | ("pending", "cancelled")
+                | ("running", "completed")
+                | ("running", "failed")
+                | ("running", "cancelled")
+        );
+
+        if valid {
+            Ok(())
+        } else {
+            Err(crate::Error::ValidationError(format!(
+                "Invalid backfill state transition: {} -> {}",
+                from, to
+            )))
+        }
+    }
+
+    /// Update backfill job state with transition validation
+    #[instrument(
+        skip(self, tenant_id),
+        fields(
+            db.system = "postgresql",
+            db.operation = "UPDATE",
+            db.sql.table = "backfill_jobs",
+            tenant_id = %tenant_id.as_str(),
+            backfill_job_id = %job_id
+        )
+    )]
+    pub async fn transition_backfill_job_state(
+        &self,
+        job_id: Uuid,
+        from_state: &str,
+        to_state: &str,
+        error_message: Option<&str>,
+        tenant_id: &TenantId,
+    ) -> Result<()> {
+        Self::validate_backfill_state(from_state)?;
+        Self::validate_backfill_state(to_state)?;
+        Self::validate_backfill_state_transition(from_state, to_state)?;
+
+        let to_state = to_state.to_string();
+        let from_state_owned = from_state.to_string();
+        let error_message = error_message.map(|s| s.to_string());
+        let now = Utc::now();
+
+        self.with_tenant_context(tenant_id, |tx| {
+            Box::pin(async move {
+                let completed_at =
+                    if to_state == "completed" || to_state == "failed" || to_state == "cancelled" {
+                        Some(now)
+                    } else {
+                        None
+                    };
+
+                let started_at = if to_state == "running" {
+                    Some(now)
+                } else {
+                    None
+                };
+
+                let result = sqlx::query(
+                    r#"
+                    UPDATE backfill_jobs
+                    SET state = $1,
+                        error_message = COALESCE($2, error_message),
+                        started_at = COALESCE($3, started_at),
+                        completed_at = COALESCE($4, completed_at),
+                        heartbeat_at = $5,
+                        version = version + 1
+                    WHERE id = $6 AND state = $7
+                    "#,
+                )
+                .bind(&to_state)
+                .bind(&error_message)
+                .bind(started_at)
+                .bind(completed_at)
+                .bind(now)
+                .bind(job_id)
+                .bind(&from_state_owned)
+                .execute(&mut **tx)
+                .await
+                .map_err(map_db_error)?;
+
+                if result.rows_affected() == 0 {
+                    return Err(crate::Error::NotFound(format!(
+                        "Backfill job {} not found in state '{}'",
+                        job_id, from_state_owned
+                    )));
+                }
+
+                Ok(())
+            })
+        })
+        .await
+    }
+
     /// List recent check results for an asset
     #[instrument(
         skip(self, tenant_id),
@@ -2070,6 +2770,39 @@ mod tests {
             assert!(PostgresStorage::validate_execution_state(state).is_ok());
         }
         assert!(PostgresStorage::validate_execution_state("bogus").is_err());
+    }
+
+    #[test]
+    fn test_validate_backfill_state_transition_valid() {
+        // Valid transitions
+        assert!(PostgresStorage::validate_backfill_state_transition("pending", "running").is_ok());
+        assert!(
+            PostgresStorage::validate_backfill_state_transition("pending", "cancelled").is_ok()
+        );
+        assert!(
+            PostgresStorage::validate_backfill_state_transition("running", "completed").is_ok()
+        );
+        assert!(PostgresStorage::validate_backfill_state_transition("running", "failed").is_ok());
+        assert!(
+            PostgresStorage::validate_backfill_state_transition("running", "cancelled").is_ok()
+        );
+    }
+
+    #[test]
+    fn test_validate_backfill_state_transition_invalid() {
+        // Invalid transitions
+        assert!(
+            PostgresStorage::validate_backfill_state_transition("pending", "completed").is_err()
+        );
+        assert!(PostgresStorage::validate_backfill_state_transition("pending", "failed").is_err());
+        assert!(PostgresStorage::validate_backfill_state_transition("running", "pending").is_err());
+        assert!(
+            PostgresStorage::validate_backfill_state_transition("completed", "running").is_err()
+        );
+        assert!(PostgresStorage::validate_backfill_state_transition("failed", "running").is_err());
+        assert!(
+            PostgresStorage::validate_backfill_state_transition("cancelled", "running").is_err()
+        );
     }
 
     #[tokio::test]

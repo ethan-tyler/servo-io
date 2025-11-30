@@ -1,5 +1,6 @@
 //! CLI command implementations
 
+pub mod backfill;
 pub mod deploy;
 pub mod init;
 pub mod lineage;

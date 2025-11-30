@@ -89,6 +89,38 @@ enum Commands {
         #[arg(long)]
         downstream: bool,
     },
+
+    /// Manage partition backfills
+    Backfill {
+        #[command(subcommand)]
+        action: BackfillAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum BackfillAction {
+    /// Trigger a backfill for a specific partition
+    Start {
+        /// Asset name to backfill
+        asset: String,
+
+        /// Partition key to backfill (e.g., "2024-01-15")
+        #[arg(long)]
+        partition: String,
+    },
+
+    /// List backfill jobs
+    List {
+        /// Filter by status (pending, running, completed, failed, cancelled)
+        #[arg(long)]
+        status: Option<String>,
+    },
+
+    /// Get status of a backfill job
+    Status {
+        /// Backfill job ID
+        job_id: String,
+    },
 }
 
 #[tokio::main]
@@ -162,6 +194,24 @@ async fn main() -> anyhow::Result<()> {
             downstream,
         } => {
             commands::lineage::execute(&name, upstream, downstream).await?;
+        }
+        Commands::Backfill { action } => {
+            let database_url = cli
+                .database_url
+                .ok_or_else(|| anyhow::anyhow!("DATABASE_URL not set"))?;
+
+            match action {
+                BackfillAction::Start { asset, partition } => {
+                    commands::backfill::execute_single_partition(&asset, &partition, &database_url)
+                        .await?;
+                }
+                BackfillAction::List { status } => {
+                    commands::backfill::list_jobs(status.as_deref(), &database_url).await?;
+                }
+                BackfillAction::Status { job_id } => {
+                    commands::backfill::get_status(&job_id, &database_url).await?;
+                }
+            }
         }
     }
 
