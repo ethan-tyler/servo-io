@@ -206,8 +206,7 @@ class AssetDefinition:
             result["partition"] = self.partition.to_dict()
         if self.partition_mappings is not None:
             result["partition_mappings"] = {
-                name: mapping.to_dict()
-                for name, mapping in self.partition_mappings.items()
+                name: mapping.to_dict() for name, mapping in self.partition_mappings.items()
             }
         return result
 

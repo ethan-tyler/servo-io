@@ -807,11 +807,7 @@ fn validate_schema_match(
     if errors.is_empty() {
         ValidationResult::passed(total)
     } else {
-        ValidationResult::failed(
-            errors.len() as i64,
-            total,
-            errors.join("; "),
-        )
+        ValidationResult::failed(errors.len() as i64, total, errors.join("; "))
     }
 }
 
@@ -1102,9 +1098,7 @@ mod tests {
 
     #[test]
     fn test_schema_match_exact_match() {
-        let data = AssetOutput::from_rows(vec![
-            json!({"id": 1, "name": "Alice"}),
-        ]);
+        let data = AssetOutput::from_rows(vec![json!({"id": 1, "name": "Alice"})]);
         let check_type = json!({
             "type": "schema_match",
             "expected_columns": ["id", "name"],
@@ -1167,10 +1161,7 @@ mod tests {
         // Add reference data
         data.columns.insert(
             "__ref__customers__id".to_string(),
-            vec![
-                Value::Number(1.into()),
-                Value::Number(2.into()),
-            ],
+            vec![Value::Number(1.into()), Value::Number(2.into())],
         );
 
         let check_type = json!({
@@ -1182,7 +1173,10 @@ mod tests {
         let result = validate_check(&check_type, &data);
         assert!(!result.passed);
         assert_eq!(result.failed_count, Some(1));
-        assert!(result.error_message.unwrap().contains("no matching reference"));
+        assert!(result
+            .error_message
+            .unwrap()
+            .contains("no matching reference"));
     }
 
     #[test]

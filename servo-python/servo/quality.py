@@ -158,28 +158,36 @@ def _extract_schema(data: Any) -> list[dict[str, Any]]:
             dtype_str = str(data[col_name].dtype)
             canonical_type = PANDAS_TYPE_MAP.get(dtype_str, "unknown")
             # Check for nulls to determine if nullable
-            nullable = bool(data[col_name].isna().any()) if hasattr(data[col_name], "isna") else True
-            schema.append({
-                "name": str(col_name),
-                "data_type": canonical_type,
-                "nullable": nullable,
-            })
+            nullable = (
+                bool(data[col_name].isna().any()) if hasattr(data[col_name], "isna") else True
+            )
+            schema.append(
+                {
+                    "name": str(col_name),
+                    "data_type": canonical_type,
+                    "nullable": nullable,
+                }
+            )
     elif hasattr(data, "schema"):  # polars DataFrame
         for field_name in data.schema:
             dtype_str = str(data.schema[field_name])
             canonical_type = POLARS_TYPE_MAP.get(dtype_str, "unknown")
-            schema.append({
-                "name": field_name,
-                "data_type": canonical_type,
-                "nullable": True,
-            })
+            schema.append(
+                {
+                    "name": field_name,
+                    "data_type": canonical_type,
+                    "nullable": True,
+                }
+            )
     elif isinstance(data, dict) or hasattr(data, "keys"):  # dict or dict-like
         for col_name in data:
-            schema.append({
-                "name": str(col_name),
-                "data_type": "unknown",
-                "nullable": True,
-            })
+            schema.append(
+                {
+                    "name": str(col_name),
+                    "data_type": "unknown",
+                    "nullable": True,
+                }
+            )
 
     return schema
 

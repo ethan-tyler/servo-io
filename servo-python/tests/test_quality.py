@@ -1101,9 +1101,7 @@ class TestSchemaMatchChecks:
     def test_schema_match_decorator_strict(self):
         """Test schema_match decorator with strict mode."""
 
-        @check.schema_match(
-            ["id", "name"], allow_extra_columns=False, severity=CheckSeverity.ERROR
-        )
+        @check.schema_match(["id", "name"], allow_extra_columns=False, severity=CheckSeverity.ERROR)
         def strict_table():
             return MockDataFrameWithColumns({"id": [1], "name": ["test"]})
 

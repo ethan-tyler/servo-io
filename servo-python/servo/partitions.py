@@ -78,9 +78,7 @@ class TimePartitionDefinition(PartitionDefinition):
     end_date: str | None = None  # None means unbounded (up to today)
     timezone: str = "UTC"
     fmt: str = "%Y-%m-%d"  # Key format
-    _granularity: PartitionGranularity = field(
-        default=PartitionGranularity.DAILY, repr=False
-    )
+    _granularity: PartitionGranularity = field(default=PartitionGranularity.DAILY, repr=False)
 
     def __post_init__(self) -> None:
         """Validate inputs."""
@@ -465,9 +463,7 @@ class MultiPartition(PartitionDefinition):
         """Serialize to dictionary."""
         return {
             "type": "multi",
-            "dimensions": {
-                name: dim.to_dict() for name, dim in self.dimensions.items()
-            },
+            "dimensions": {name: dim.to_dict() for name, dim in self.dimensions.items()},
         }
 
 
