@@ -180,6 +180,10 @@ pub async fn execute_single_partition(
         completed_at: None,
         heartbeat_at: None,
         version: 1,
+        paused_at: None,
+        checkpoint_partition_key: None,
+        estimated_completion_at: None,
+        avg_partition_duration_ms: None,
     };
 
     storage.create_backfill_job(&job, &tenant_id).await?;
@@ -313,6 +317,10 @@ pub async fn execute_range_backfill(
         completed_at: None,
         heartbeat_at: None,
         version: 1,
+        paused_at: None,
+        checkpoint_partition_key: None,
+        estimated_completion_at: None,
+        avg_partition_duration_ms: None,
     };
 
     storage.create_backfill_job(&job, &tenant_id).await?;
@@ -401,6 +409,96 @@ pub async fn cancel_job(job_id: &str, reason: Option<&str>, database_url: &str) 
     Ok(())
 }
 
+/// Pause a running backfill job
+///
+/// Pauses a running backfill job at the next partition boundary. The current
+/// partition will complete, but no new partitions will be started. The job
+/// can be resumed later from where it left off.
+pub async fn pause_job(job_id: &str, database_url: &str) -> Result<()> {
+    let tenant_id = std::env::var("TENANT_ID").context("TENANT_ID environment variable not set")?;
+    let tenant_id = TenantId::new(&tenant_id);
+
+    let job_uuid = job_id
+        .parse::<Uuid>()
+        .context("job_id must be a valid UUID")?;
+
+    info!("Pausing backfill job {}", job_id);
+
+    let storage = PostgresStorage::new(database_url).await?;
+
+    // Pause the job - the storage layer handles finding the checkpoint
+    storage
+        .pause_backfill_job(job_uuid, &tenant_id)
+        .await?;
+
+    info!("Backfill job {} paused", job_id);
+
+    // Get the updated job to show status
+    let job = storage.get_backfill_job(job_uuid, &tenant_id).await?;
+
+    let completed = job.completed_partitions;
+    let total = job.total_partitions;
+    let remaining = total - completed - job.failed_partitions - job.skipped_partitions;
+
+    println!("Job {} paused", job_id);
+    println!(
+        "Progress: {}/{} completed ({} remaining)",
+        completed, total, remaining
+    );
+    if let Some(cp) = &job.checkpoint_partition_key {
+        println!("Checkpoint: {}", cp);
+    }
+    println!("Use 'servo backfill resume {}' to continue", job_id);
+
+    Ok(())
+}
+
+/// Resume a paused backfill job
+///
+/// Resumes a paused backfill job from where it left off. The job will continue
+/// processing from the checkpoint partition.
+pub async fn resume_job(job_id: &str, database_url: &str) -> Result<()> {
+    let tenant_id = std::env::var("TENANT_ID").context("TENANT_ID environment variable not set")?;
+    let tenant_id = TenantId::new(&tenant_id);
+
+    let job_uuid = job_id
+        .parse::<Uuid>()
+        .context("job_id must be a valid UUID")?;
+
+    info!("Resuming backfill job {}", job_id);
+
+    let storage = PostgresStorage::new(database_url).await?;
+
+    // Get the job first to validate state
+    let job = storage.get_backfill_job(job_uuid, &tenant_id).await?;
+
+    if job.state != "paused" {
+        bail!(
+            "Cannot resume job in state '{}'. Only paused jobs can be resumed.",
+            job.state
+        );
+    }
+
+    storage.resume_backfill_job(job_uuid, &tenant_id).await?;
+
+    info!("Backfill job {} resumed", job_id);
+
+    let completed = job.completed_partitions;
+    let total = job.total_partitions;
+    let remaining = total - completed - job.failed_partitions - job.skipped_partitions;
+
+    println!("Job {} resumed", job_id);
+    println!(
+        "Progress: {}/{} completed ({} remaining)",
+        completed, total, remaining
+    );
+    if let Some(cp) = &job.checkpoint_partition_key {
+        println!("Resuming from checkpoint: {}", cp);
+    }
+
+    Ok(())
+}
+
 /// Get backfill job status
 pub async fn get_status(job_id: &str, database_url: &str) -> Result<BackfillJobModel> {
     let tenant_id = std::env::var("TENANT_ID").context("TENANT_ID environment variable not set")?;
@@ -416,10 +514,65 @@ pub async fn get_status(job_id: &str, database_url: &str) -> Result<BackfillJobM
     println!("Job ID:      {}", job.id);
     println!("Asset:       {}", job.asset_name);
     println!("State:       {}", job.state);
+
+    // Calculate progress percentage
+    let progress_pct = if job.total_partitions > 0 {
+        (job.completed_partitions as f64 / job.total_partitions as f64) * 100.0
+    } else {
+        0.0
+    };
+
+    let remaining =
+        job.total_partitions - job.completed_partitions - job.failed_partitions - job.skipped_partitions;
+
     println!(
-        "Progress:    {}/{} completed, {} failed",
-        job.completed_partitions, job.total_partitions, job.failed_partitions
+        "Progress:    {}/{} ({:.1}%) - {} remaining, {} failed, {} skipped",
+        job.completed_partitions,
+        job.total_partitions,
+        progress_pct,
+        remaining,
+        job.failed_partitions,
+        job.skipped_partitions
     );
+
+    // Show rate if available
+    if let Some(avg_ms) = job.avg_partition_duration_ms {
+        if avg_ms > 0 {
+            let rate_per_min = 60_000.0 / avg_ms as f64;
+            println!(
+                "Rate:        {:.1} partitions/min (avg {}ms/partition)",
+                rate_per_min, avg_ms
+            );
+        }
+    }
+
+    // Show ETA if available and job is running
+    if job.state == "running" {
+        if let Some(eta) = job.estimated_completion_at {
+            let now = Utc::now();
+            if eta > now {
+                let remaining_duration = eta - now;
+                let hours = remaining_duration.num_hours();
+                let mins = remaining_duration.num_minutes() % 60;
+                let secs = remaining_duration.num_seconds() % 60;
+
+                let eta_str = if hours > 0 {
+                    format!("{}h {}m", hours, mins)
+                } else if mins > 0 {
+                    format!("{}m {}s", mins, secs)
+                } else {
+                    format!("{}s", secs)
+                };
+
+                println!(
+                    "ETA:         {} ({})",
+                    eta.format("%Y-%m-%d %H:%M:%S"),
+                    eta_str
+                );
+            }
+        }
+    }
+
     println!(
         "Created:     {}",
         job.created_at.format("%Y-%m-%d %H:%M:%S")
@@ -428,8 +581,14 @@ pub async fn get_status(job_id: &str, database_url: &str) -> Result<BackfillJobM
     if let Some(started) = job.started_at {
         println!("Started:     {}", started.format("%Y-%m-%d %H:%M:%S"));
     }
+    if let Some(paused) = job.paused_at {
+        println!("Paused:      {}", paused.format("%Y-%m-%d %H:%M:%S"));
+    }
     if let Some(completed) = job.completed_at {
         println!("Completed:   {}", completed.format("%Y-%m-%d %H:%M:%S"));
+    }
+    if let Some(checkpoint) = &job.checkpoint_partition_key {
+        println!("Checkpoint:  {}", checkpoint);
     }
     if let Some(error) = &job.error_message {
         println!("Error:       {}", error);
@@ -516,6 +675,10 @@ mod tests {
             completed_at: None,
             heartbeat_at: None,
             version: 1,
+            paused_at: None,
+            checkpoint_partition_key: None,
+            estimated_completion_at: None,
+            avg_partition_duration_ms: None,
         };
 
         assert_eq!(job.state, "pending");

@@ -120,7 +120,7 @@ enum BackfillAction {
 
     /// List backfill jobs
     List {
-        /// Filter by status (pending, running, completed, failed, cancelled)
+        /// Filter by status (pending, running, paused, completed, failed, cancelled)
         #[arg(long)]
         status: Option<String>,
     },
@@ -128,6 +128,18 @@ enum BackfillAction {
     /// Get status of a backfill job
     Status {
         /// Backfill job ID
+        job_id: String,
+    },
+
+    /// Pause a running backfill job at the next partition boundary
+    Pause {
+        /// Backfill job ID to pause
+        job_id: String,
+    },
+
+    /// Resume a paused backfill job from where it left off
+    Resume {
+        /// Backfill job ID to resume
         job_id: String,
     },
 
@@ -250,6 +262,12 @@ async fn main() -> anyhow::Result<()> {
                 }
                 BackfillAction::Status { job_id } => {
                     commands::backfill::get_status(&job_id, &database_url).await?;
+                }
+                BackfillAction::Pause { job_id } => {
+                    commands::backfill::pause_job(&job_id, &database_url).await?;
+                }
+                BackfillAction::Resume { job_id } => {
+                    commands::backfill::resume_job(&job_id, &database_url).await?;
                 }
                 BackfillAction::Cancel { job_id, reason } => {
                     commands::backfill::cancel_job(&job_id, reason.as_deref(), &database_url)

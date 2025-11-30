@@ -285,3 +285,110 @@ groups:
           summary: "High workflow timeout rate"
           description: "{{ $value | printf \"%.1f\" }}% of workflows timing out"
           runbook_url: "https://docs.servo.io/runbooks/workflow-timeouts"
+
+  # ==========================================================================
+  # Backfill Operations Alerts
+  # ==========================================================================
+  - name: servo_backfill
+    rules:
+      # Backfill job stuck (no partition progress)
+      - alert: ServoBackfillJobStuck
+        expr: |
+          (
+            servo_backfill_jobs_active{state="running"} > 0
+          )
+          unless on()
+          (
+            sum(rate(servo_backfill_partition_completion_total[5m])) > 0
+          )
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Backfill job may be stuck"
+          description: "Running backfill jobs detected but no partition completions in 5 minutes"
+          runbook_url: "https://docs.servo.io/runbooks/backfill-operations"
+
+      # High partition failure rate
+      - alert: ServoBackfillHighFailureRate
+        expr: |
+          (
+            sum(rate(servo_backfill_partition_completion_total{status="failed"}[10m]))
+            / sum(rate(servo_backfill_partition_completion_total[10m]))
+          ) > 0.2
+        for: 10m
+        labels:
+          severity: warning
+          team: data
+        annotations:
+          summary: "High backfill partition failure rate"
+          description: "{{ $value | printf \"%.1f\" }}% of partitions failing (threshold: 20%)"
+          runbook_url: "https://docs.servo.io/runbooks/backfill-operations"
+
+      # Backfill running longer than expected
+      - alert: ServoBackfillLongRunning
+        expr: |
+          histogram_quantile(0.5, servo_backfill_eta_distribution_seconds_bucket) > 14400
+        for: 30m
+        labels:
+          severity: info
+          team: data
+        annotations:
+          summary: "Backfill job with long ETA"
+          description: "Backfill job has >4 hours estimated remaining time"
+          runbook_url: "https://docs.servo.io/runbooks/backfill-operations"
+
+      # Jobs stuck in resuming state
+      - alert: ServoBackfillResumingStuck
+        expr: |
+          servo_backfill_jobs_active{state="resuming"} > 0
+        for: 10m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Backfill job stuck in resuming state"
+          description: "Job requested resume but not picked up by executor in 10 minutes"
+          runbook_url: "https://docs.servo.io/runbooks/backfill-operations"
+
+      # High number of jobs pending (queue depth)
+      - alert: ServoBackfillQueueDepth
+        expr: |
+          servo_backfill_jobs_active{state="pending"} > 10
+        for: 15m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "High backfill job queue depth"
+          description: "{{ $value }} jobs pending (threshold: 10)"
+          runbook_url: "https://docs.servo.io/runbooks/backfill-operations"
+
+      # Jobs paused for too long
+      - alert: ServoBackfillPausedTooLong
+        expr: |
+          histogram_quantile(0.5, servo_backfill_pause_duration_seconds_bucket) > 86400
+        for: 1h
+        labels:
+          severity: info
+          team: data
+        annotations:
+          summary: "Backfill job paused for extended period"
+          description: "Backfill job has been paused for >24 hours"
+          runbook_url: "https://docs.servo.io/runbooks/backfill-operations"
+
+      # Slow partition execution (possible performance issue)
+      - alert: ServoBackfillSlowPartitions
+        expr: |
+          histogram_quantile(0.95,
+            sum(rate(servo_backfill_partition_duration_seconds_bucket[15m])) by (le)
+          ) > 60
+        for: 15m
+        labels:
+          severity: warning
+          team: data
+        annotations:
+          summary: "Slow backfill partition execution"
+          description: "P95 partition duration is {{ $value | printf \"%.0f\" }}s (threshold: 60s)"
+          runbook_url: "https://docs.servo.io/runbooks/backfill-operations"

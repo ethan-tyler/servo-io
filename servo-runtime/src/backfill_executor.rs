@@ -3,14 +3,29 @@
 //! The BackfillExecutor polls for pending backfill jobs and processes them
 //! by executing each partition sequentially. It uses atomic claiming with
 //! FOR UPDATE SKIP LOCKED to safely support multiple executor instances.
+//!
+//! ## Pause/Resume Support
+//!
+//! Jobs can be paused by the user. When paused:
+//! - The executor stops at the next partition boundary
+//! - The checkpoint (last completed partition) is recorded
+//! - The job transitions to 'paused' state
+//!
+//! When resumed:
+//! - The job transitions to 'resuming' state
+//! - The executor claims it and transitions to 'running'
+//! - Execution continues from where it left off
 
+use crate::eta::EtaCalculator;
 use crate::metrics::{
-    BACKFILL_JOB_CANCELLATION_TOTAL, BACKFILL_JOB_CLAIM_TOTAL, BACKFILL_PARTITION_CLAIM_TOTAL,
-    BACKFILL_PARTITION_COMPLETION_TOTAL, BACKFILL_PARTITION_DURATION,
+    BACKFILL_ETA_DISTRIBUTION, BACKFILL_JOBS_ACTIVE, BACKFILL_JOB_CANCELLATION_TOTAL,
+    BACKFILL_JOB_CLAIM_TOTAL, BACKFILL_JOB_ETA_SECONDS, BACKFILL_JOB_PROGRESS_RATIO,
+    BACKFILL_PARTITION_CLAIM_TOTAL, BACKFILL_PARTITION_COMPLETION_TOTAL, BACKFILL_PARTITION_DURATION,
 };
 use crate::orchestrator::ExecutionOrchestrator;
 use crate::Result;
-use servo_storage::{BackfillJobModel, BackfillPartitionModel, PostgresStorage, TenantId};
+use chrono::Utc;
+use servo_storage::{BackfillJobModel, BackfillPartitionModel, BackfillProgressUpdate, PostgresStorage, TenantId};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::interval;
@@ -126,6 +141,9 @@ impl BackfillExecutor {
                         .with_label_values(&[claim_type, "success"])
                         .inc();
 
+                    // Track active running jobs (low-cardinality metric)
+                    BACKFILL_JOBS_ACTIVE.with_label_values(&["running"]).inc();
+
                     info!(
                         job_id = %job.id,
                         asset = %job.asset_name,
@@ -138,6 +156,9 @@ impl BackfillExecutor {
                             error!("Failed to process backfill job: {}", e);
                         }
                     }
+
+                    // Decrement running jobs counter when done (regardless of success/failure)
+                    BACKFILL_JOBS_ACTIVE.with_label_values(&["running"]).dec();
                 }
                 None => {
                     // No more jobs to claim
@@ -160,10 +181,18 @@ impl BackfillExecutor {
         let mut completed_count = job.completed_partitions;
         let mut failed_count = job.failed_partitions;
         let skipped_count = job.skipped_partitions;
+        let mut last_completed_partition: Option<String> = job.checkpoint_partition_key.clone();
+
+        // Initialize ETA calculator with existing average if available
+        let mut eta_calculator = if let Some(avg_ms) = job.avg_partition_duration_ms {
+            EtaCalculator::with_initial_avg(0.3, avg_ms)
+        } else {
+            EtaCalculator::new(0.3)
+        };
 
         // Process partitions using atomic claiming
         loop {
-            // Check if job was cancelled before processing next partition
+            // Check if job was cancelled or paused before processing next partition
             let is_cancelled = self
                 .storage
                 .is_backfill_job_cancelled(job.id, &self.tenant_id)
@@ -180,6 +209,24 @@ impl BackfillExecutor {
                     "Job cancelled, stopping partition processing"
                 );
                 // Job is already in cancelled state, just return
+                return Ok(());
+            }
+
+            // Check if job was paused
+            let is_paused = self
+                .storage
+                .is_backfill_job_paused(job.id, &self.tenant_id)
+                .await
+                .map_err(|e| crate::Error::Internal(e.to_string()))?;
+
+            if is_paused {
+                info!(
+                    job_id = %job.id,
+                    completed = completed_count,
+                    checkpoint = ?last_completed_partition,
+                    "Job paused, stopping partition processing at checkpoint"
+                );
+                // Job is already in paused state (set by pause_backfill_job), just return
                 return Ok(());
             }
 
@@ -214,7 +261,9 @@ impl BackfillExecutor {
                     let partition_start = std::time::Instant::now();
                     match self.execute_partition(&job, &partition).await {
                         Ok(_) => {
-                            let duration_secs = partition_start.elapsed().as_secs_f64();
+                            let duration_ms = partition_start.elapsed().as_millis() as u64;
+                            let duration_secs = duration_ms as f64 / 1000.0;
+
                             BACKFILL_PARTITION_DURATION
                                 .with_label_values(&["completed"])
                                 .observe(duration_secs);
@@ -222,12 +271,22 @@ impl BackfillExecutor {
                                 .with_label_values(&["completed"])
                                 .inc();
 
+                            // Update ETA calculator
+                            eta_calculator.update(duration_ms);
+
                             completed_count += 1;
+                            last_completed_partition = Some(partition.partition_key.clone());
+
+                            // Calculate remaining partitions and ETA
+                            let remaining = job.total_partitions - completed_count - failed_count - skipped_count;
+                            let eta = eta_calculator.estimate_completion_time(remaining as u32);
+
                             info!(
                                 partition_key = %partition.partition_key,
                                 completed = completed_count,
                                 total = job.total_partitions,
-                                duration_secs = duration_secs,
+                                duration_ms = duration_ms,
+                                eta = ?eta.map(|t| t.format("%H:%M:%S").to_string()),
                                 "Partition completed"
                             );
                         }
@@ -261,9 +320,43 @@ impl BackfillExecutor {
                         }
                     }
 
-                    // Update job progress (idempotent - always set absolute values)
-                    self.update_job_progress(job.id, completed_count, failed_count, skipped_count)
-                        .await?;
+                    // Update job progress with ETA (idempotent - always set absolute values)
+                    let remaining = job.total_partitions - completed_count - failed_count - skipped_count;
+                    let estimated_completion = eta_calculator.estimate_completion_time(remaining as u32);
+
+                    // Emit progress metrics
+                    let progress_ratio = if job.total_partitions > 0 {
+                        completed_count as f64 / job.total_partitions as f64
+                    } else {
+                        0.0
+                    };
+                    BACKFILL_JOB_PROGRESS_RATIO
+                        .with_label_values(&[&job.id.to_string(), &job.asset_name])
+                        .set(progress_ratio);
+
+                    if let Some(eta) = &estimated_completion {
+                        let eta_seconds = (*eta - Utc::now()).num_seconds().max(0) as f64;
+
+                        // Low-cardinality ETA distribution (recommended)
+                        BACKFILL_ETA_DISTRIBUTION
+                            .with_label_values(&[])
+                            .observe(eta_seconds);
+
+                        // High-cardinality per-job ETA (deprecated)
+                        BACKFILL_JOB_ETA_SECONDS
+                            .with_label_values(&[&job.id.to_string(), &job.asset_name])
+                            .set(eta_seconds);
+                    }
+
+                    let progress = BackfillProgressUpdate {
+                        completed: completed_count,
+                        failed: failed_count,
+                        skipped: skipped_count,
+                        avg_partition_duration_ms: Some(eta_calculator.avg_duration_ms()),
+                        estimated_completion_at: estimated_completion,
+                        checkpoint_partition_key: last_completed_partition.clone(),
+                    };
+                    self.update_job_progress_with_eta(job.id, &progress).await?;
                 }
                 None => {
                     // No more partitions to process - job is done
@@ -462,16 +555,14 @@ impl BackfillExecutor {
             .map_err(|e| crate::Error::Internal(e.to_string()))
     }
 
-    /// Update job progress counters (idempotent - always sets absolute values)
-    async fn update_job_progress(
+    /// Update job progress counters with ETA information
+    async fn update_job_progress_with_eta(
         &self,
         job_id: Uuid,
-        completed: i32,
-        failed: i32,
-        skipped: i32,
+        progress: &BackfillProgressUpdate,
     ) -> Result<()> {
         self.storage
-            .update_backfill_job_progress(job_id, completed, failed, skipped, &self.tenant_id)
+            .update_backfill_job_progress_with_eta(job_id, progress, &self.tenant_id)
             .await
             .map_err(|e| crate::Error::Internal(e.to_string()))
     }
@@ -535,5 +626,70 @@ mod tests {
         assert!(key.starts_with("backfill:"));
         assert!(key.contains(partition_key));
         assert!(key.ends_with(":2"));
+    }
+
+    #[test]
+    fn test_valid_state_transitions() {
+        // Define valid state transitions for backfill jobs
+        let valid_transitions = vec![
+            ("pending", "running"),
+            ("running", "paused"),
+            ("running", "completed"),
+            ("running", "failed"),
+            ("running", "cancelled"),
+            ("paused", "resuming"),
+            ("paused", "cancelled"),
+            ("resuming", "running"),
+        ];
+
+        // All valid states
+        let all_states = ["pending", "running", "paused", "resuming", "completed", "failed", "cancelled"];
+        let terminal_states = ["completed", "failed", "cancelled"];
+
+        for (from, to) in &valid_transitions {
+            // Just verify these are valid states
+            assert!(all_states.contains(from), "Invalid 'from' state: {}", from);
+            assert!(all_states.contains(to), "Invalid 'to' state: {}", to);
+        }
+
+        // Verify terminal states have no outgoing transitions
+        for terminal in terminal_states {
+            for (from, _) in &valid_transitions {
+                assert_ne!(*from, terminal, "Terminal state {} should not have outgoing transitions", terminal);
+            }
+        }
+    }
+
+    #[test]
+    fn test_pause_boundary_behavior() {
+        // This test documents the expected pause boundary behavior:
+        // - When pause is requested, the current partition completes
+        // - The checkpoint is set to the last completed partition
+        // - No new partitions are picked up after the current one
+
+        // Simulate partition keys for a job
+        let partitions = vec!["2024-01-01", "2024-01-02", "2024-01-03", "2024-01-04", "2024-01-05"];
+
+        // Simulate processing up to partition 3 when pause is requested
+        let completed_before_pause = vec!["2024-01-01", "2024-01-02"];
+        let in_flight_when_pause = "2024-01-03"; // This will complete
+        let not_started = vec!["2024-01-04", "2024-01-05"]; // These won't be picked up
+
+        // Expected checkpoint after pause
+        let expected_checkpoint = in_flight_when_pause; // Last completed partition
+
+        // Verify the checkpoint logic
+        let completed_after_pause: Vec<&str> = completed_before_pause
+            .iter()
+            .copied()
+            .chain(std::iter::once(in_flight_when_pause))
+            .collect();
+
+        assert_eq!(completed_after_pause.last(), Some(&expected_checkpoint));
+        assert_eq!(not_started.len(), 2); // These should remain pending after pause
+
+        // When resumed, processing should start after the checkpoint
+        let resume_index = partitions.iter().position(|p| *p == expected_checkpoint).unwrap() + 1;
+        assert_eq!(partitions[resume_index], "2024-01-04"); // First partition after checkpoint
     }
 }
