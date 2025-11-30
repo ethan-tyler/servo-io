@@ -1,8 +1,8 @@
 //! Backfill command for triggering partition backfills
 //!
-//! **Current Status**: This increment implements CRUD operations and CLI only.
-//! Actual partition execution is NOT yet wired - jobs will remain in "pending" state.
-//! Execution will be implemented in a subsequent increment.
+//! This module provides CLI commands for creating and managing backfill jobs.
+//! Jobs are created in "pending" state and picked up by the BackfillExecutor
+//! background service for execution.
 
 use anyhow::{bail, Context, Result};
 use chrono::{Duration, NaiveDate, Utc};
@@ -93,10 +93,8 @@ fn validate_partition_key(partition_key: &str) -> Result<String> {
 /// Execute a single partition backfill
 ///
 /// Creates a backfill job for the specified asset and partition key.
-///
-/// **NOTE**: This increment only creates the job record. Actual execution
-/// is not yet wired - the job will remain in "pending" state until
-/// the execution subsystem is implemented in a subsequent increment.
+/// The job is created in "pending" state and will be picked up by the
+/// BackfillExecutor background service for execution.
 pub async fn execute_single_partition(
     asset_name: &str,
     partition_key: &str,
@@ -207,12 +205,8 @@ pub async fn execute_single_partition(
         .await?;
     info!("Created partition record for '{}'", partition_key);
 
-    // NOTE: Execution is not yet wired in this increment.
-    // The job remains in "pending" state until the execution subsystem
-    // picks it up (to be implemented in a subsequent increment).
-    warn!(
-        "Backfill job {} created in PENDING state. \
-         Execution is not yet implemented - job will not run automatically.",
+    info!(
+        "Backfill job {} created. Will be picked up by the BackfillExecutor service.",
         job_id
     );
 
@@ -223,10 +217,8 @@ pub async fn execute_single_partition(
 /// Execute a date range backfill
 ///
 /// Creates a single backfill job with multiple partition records for each date
-/// in the specified range (inclusive).
-///
-/// **NOTE**: This increment only creates the job and partition records.
-/// Actual execution is not yet wired - jobs will remain in "pending" state.
+/// in the specified range (inclusive). The job is created in "pending" state
+/// and will be picked up by the BackfillExecutor background service.
 pub async fn execute_range_backfill(
     asset_name: &str,
     start_date: &str,
@@ -348,10 +340,8 @@ pub async fn execute_range_backfill(
     }
     info!("Created {} partition records", partition_count);
 
-    // NOTE: Execution is not yet wired in this increment.
-    warn!(
-        "Backfill job {} created in PENDING state with {} partitions. \
-         Execution is not yet implemented - job will not run automatically.",
+    info!(
+        "Backfill job {} created with {} partitions. Will be picked up by the BackfillExecutor service.",
         job_id, partition_count
     );
 
@@ -385,6 +375,30 @@ pub async fn list_jobs(
     }
 
     Ok(jobs)
+}
+
+/// Cancel a backfill job
+///
+/// Cancels a pending or running backfill job. Running partitions will complete,
+/// but no new partitions will be started. Pending partitions are marked as skipped.
+pub async fn cancel_job(job_id: &str, reason: Option<&str>, database_url: &str) -> Result<()> {
+    let tenant_id = std::env::var("TENANT_ID").context("TENANT_ID environment variable not set")?;
+    let tenant_id = TenantId::new(&tenant_id);
+
+    let job_uuid = job_id
+        .parse::<Uuid>()
+        .context("job_id must be a valid UUID")?;
+
+    info!("Cancelling backfill job {}", job_id);
+
+    let storage = PostgresStorage::new(database_url).await?;
+    storage
+        .cancel_backfill_job(job_uuid, reason, &tenant_id)
+        .await?;
+
+    info!("Backfill job {} cancelled", job_id);
+    println!("Job {} cancelled", job_id);
+    Ok(())
 }
 
 /// Get backfill job status
