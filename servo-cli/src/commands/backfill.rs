@@ -377,6 +377,30 @@ pub async fn list_jobs(
     Ok(jobs)
 }
 
+/// Cancel a backfill job
+///
+/// Cancels a pending or running backfill job. Running partitions will complete,
+/// but no new partitions will be started. Pending partitions are marked as skipped.
+pub async fn cancel_job(job_id: &str, reason: Option<&str>, database_url: &str) -> Result<()> {
+    let tenant_id = std::env::var("TENANT_ID").context("TENANT_ID environment variable not set")?;
+    let tenant_id = TenantId::new(&tenant_id);
+
+    let job_uuid = job_id
+        .parse::<Uuid>()
+        .context("job_id must be a valid UUID")?;
+
+    info!("Cancelling backfill job {}", job_id);
+
+    let storage = PostgresStorage::new(database_url).await?;
+    storage
+        .cancel_backfill_job(job_uuid, reason, &tenant_id)
+        .await?;
+
+    info!("Backfill job {} cancelled", job_id);
+    println!("Job {} cancelled", job_id);
+    Ok(())
+}
+
 /// Get backfill job status
 pub async fn get_status(job_id: &str, database_url: &str) -> Result<BackfillJobModel> {
     let tenant_id = std::env::var("TENANT_ID").context("TENANT_ID environment variable not set")?;

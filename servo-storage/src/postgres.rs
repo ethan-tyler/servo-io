@@ -2695,6 +2695,124 @@ impl PostgresStorage {
         .await
     }
 
+    /// Cancel a backfill job
+    ///
+    /// Transitions the job to cancelled state. Only pending or running jobs can be cancelled.
+    /// Also marks all pending partitions as skipped.
+    #[instrument(
+        skip(self, tenant_id),
+        fields(
+            db.system = "postgresql",
+            db.operation = "UPDATE",
+            db.sql.table = "backfill_jobs",
+            tenant_id = %tenant_id.as_str(),
+            job_id = %job_id
+        )
+    )]
+    pub async fn cancel_backfill_job(
+        &self,
+        job_id: Uuid,
+        reason: Option<&str>,
+        tenant_id: &TenantId,
+    ) -> Result<()> {
+        let reason = reason.map(|s| s.to_string());
+        let now = Utc::now();
+
+        self.with_tenant_context(tenant_id, |tx| {
+            Box::pin(async move {
+                // Get current job state
+                let job = sqlx::query_as::<_, BackfillJobModel>(
+                    r#"
+                    SELECT id, tenant_id, asset_id, asset_name, idempotency_key, state,
+                           execution_strategy, partition_start, partition_end, partition_keys,
+                           total_partitions, completed_partitions, failed_partitions, skipped_partitions,
+                           include_upstream, error_message, created_by, created_at, started_at,
+                           completed_at, heartbeat_at, version
+                    FROM backfill_jobs
+                    WHERE id = $1
+                    FOR UPDATE
+                    "#,
+                )
+                .bind(job_id)
+                .fetch_optional(&mut **tx)
+                .await
+                .map_err(map_db_error)?
+                .ok_or_else(|| crate::Error::NotFound(format!("Backfill job {} not found", job_id)))?;
+
+                // Validate transition
+                if job.state != "pending" && job.state != "running" {
+                    return Err(crate::Error::ValidationError(format!(
+                        "Cannot cancel job in state '{}'. Only pending or running jobs can be cancelled.",
+                        job.state
+                    )));
+                }
+
+                let error_message = reason.unwrap_or_else(|| "Cancelled by user".to_string());
+
+                // Update job to cancelled
+                sqlx::query(
+                    r#"
+                    UPDATE backfill_jobs
+                    SET state = 'cancelled',
+                        error_message = $1,
+                        completed_at = $2,
+                        version = version + 1
+                    WHERE id = $3
+                    "#,
+                )
+                .bind(&error_message)
+                .bind(now)
+                .bind(job_id)
+                .execute(&mut **tx)
+                .await
+                .map_err(map_db_error)?;
+
+                // Mark all pending partitions as skipped
+                sqlx::query(
+                    r#"
+                    UPDATE backfill_partitions
+                    SET state = 'skipped',
+                        completed_at = $1,
+                        error_message = 'Job cancelled'
+                    WHERE backfill_job_id = $2 AND state = 'pending'
+                    "#,
+                )
+                .bind(now)
+                .bind(job_id)
+                .execute(&mut **tx)
+                .await
+                .map_err(map_db_error)?;
+
+                Ok(())
+            })
+        })
+        .await
+    }
+
+    /// Check if a backfill job has been cancelled
+    ///
+    /// Useful for executors to check before processing each partition
+    pub async fn is_backfill_job_cancelled(
+        &self,
+        job_id: Uuid,
+        tenant_id: &TenantId,
+    ) -> Result<bool> {
+        self.with_tenant_context(tenant_id, |tx| {
+            Box::pin(async move {
+                let state: Option<(String,)> = sqlx::query_as(
+                    r#"SELECT state FROM backfill_jobs WHERE id = $1"#,
+                )
+                .bind(job_id)
+                .fetch_optional(&mut **tx)
+                .await
+                .map_err(map_db_error)?;
+
+                Ok(state.map(|(s,)| s == "cancelled").unwrap_or(false))
+            })
+        })
+        .await
+    }
+
     /// Update backfill job heartbeat timestamp
     #[instrument(
         skip(self, tenant_id),

@@ -130,6 +130,16 @@ enum BackfillAction {
         /// Backfill job ID
         job_id: String,
     },
+
+    /// Cancel a backfill job
+    Cancel {
+        /// Backfill job ID to cancel
+        job_id: String,
+
+        /// Reason for cancellation (optional)
+        #[arg(long)]
+        reason: Option<String>,
+    },
 }
 
 #[tokio::main]
@@ -240,6 +250,10 @@ async fn main() -> anyhow::Result<()> {
                 }
                 BackfillAction::Status { job_id } => {
                     commands::backfill::get_status(&job_id, &database_url).await?;
+                }
+                BackfillAction::Cancel { job_id, reason } => {
+                    commands::backfill::cancel_job(&job_id, reason.as_deref(), &database_url)
+                        .await?;
                 }
             }
         }
