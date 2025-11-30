@@ -121,6 +121,14 @@ pub struct BackfillJobModel {
     pub completed_at: Option<DateTime<Utc>>,
     pub heartbeat_at: Option<DateTime<Utc>>,
     pub version: i32,
+    /// Timestamp when the job was paused (for pause/resume)
+    pub paused_at: Option<DateTime<Utc>>,
+    /// Last successfully processed partition key (for resumption)
+    pub checkpoint_partition_key: Option<String>,
+    /// Estimated completion time based on EWMA
+    pub estimated_completion_at: Option<DateTime<Utc>>,
+    /// Average partition duration in milliseconds (EWMA)
+    pub avg_partition_duration_ms: Option<i64>,
 }
 
 /// Backfill partition model for tracking individual partition execution
@@ -137,4 +145,25 @@ pub struct BackfillPartitionModel {
     pub started_at: Option<DateTime<Utc>>,
     pub completed_at: Option<DateTime<Utc>>,
     pub tenant_id: String,
+}
+
+/// Parameters for updating backfill job progress with ETA information
+///
+/// This struct groups related parameters for atomic progress updates,
+/// addressing the function argument count clippy warning while improving
+/// API clarity.
+#[derive(Debug, Clone, Default)]
+pub struct BackfillProgressUpdate {
+    /// Number of completed partitions
+    pub completed: i32,
+    /// Number of failed partitions
+    pub failed: i32,
+    /// Number of skipped partitions
+    pub skipped: i32,
+    /// Average partition duration in milliseconds (EWMA)
+    pub avg_partition_duration_ms: Option<i64>,
+    /// Estimated completion time
+    pub estimated_completion_at: Option<DateTime<Utc>>,
+    /// Last successfully completed partition key (checkpoint for resumption)
+    pub checkpoint_partition_key: Option<String>,
 }

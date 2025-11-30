@@ -10,6 +10,7 @@ The `servo-runtime` crate manages the execution lifecycle of Servo workflows
 with PostgreSQL persistence and multi-tenant isolation:
 
 - **ExecutionOrchestrator**: Stateless orchestrator for managing execution lifecycle with RLS enforcement
+- **BackfillExecutor**: Processes partition backfill jobs with pause/resume support and ETA tracking
 - **State Machine**: Manages execution state transitions (Pending → Running → Succeeded/Failed/Cancelled/Timeout)
 - **Retry Logic**: Configurable retry policies with exponential backoff + jitter and max elapsed time
 - **Concurrency Control**: Limits parallel executions to prevent resource exhaustion
@@ -78,6 +79,49 @@ retry_policy.execute_with_retry(|| async {
     database_call().await
 }).await?;
 ```
+
+### Backfill Executor
+
+The `BackfillExecutor` processes partition backfill jobs with built-in pause/resume support:
+
+```rust
+use servo_runtime::{BackfillExecutor, BackfillExecutorConfig, run_backfill_executor};
+use servo_storage::{PostgresStorage, TenantId};
+use std::sync::Arc;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let storage = Arc::new(PostgresStorage::new("postgresql://...").await?);
+    let orchestrator = ExecutionOrchestrator::new(storage.clone(), RetryPolicy::default());
+    let tenant = TenantId::new("my-tenant");
+
+    // Run backfill executor (polls for jobs and processes them)
+    run_backfill_executor(
+        storage,
+        orchestrator,
+        tenant,
+        Some(BackfillExecutorConfig::default()),
+    ).await?;
+
+    Ok(())
+}
+```
+
+**Backfill Job States:**
+
+- `pending` → `running` (claimed by executor)
+- `running` → `paused` (user requested pause)
+- `paused` → `resuming` (user requested resume)
+- `resuming` → `running` (claimed by executor)
+- `running` → `completed` | `failed` | `cancelled`
+
+**Key Features:**
+
+- **Partition-boundary pause**: Current partition completes before stopping
+- **Checkpoint persistence**: Progress saved for accurate resumption
+- **ETA calculation**: EWMA-based estimation preserved across pause/resume
+- **Atomic job claiming**: FOR UPDATE SKIP LOCKED prevents race conditions
+- **Stale heartbeat recovery**: Auto-reclaim jobs from crashed executors
 
 ## Features
 
@@ -172,6 +216,7 @@ cargo test --package servo-runtime test_execution_lifecycle_with_rls -- --ignore
 ```
 
 **Test Coverage:**
+
 - Execution lifecycle (Pending → Running → Succeeded)
 - Tenant isolation enforced by RLS
 - Invalid state transition rejection
@@ -180,6 +225,19 @@ cargo test --package servo-runtime test_execution_lifecycle_with_rls -- --ignore
 - Retry transitions (Failed → Running)
 - Concurrent executions (10 parallel)
 - Concurrent state transitions (5 parallel)
+
+**Backfill Integration Tests:**
+
+```bash
+cargo test --package servo-runtime --test backfill_integration -- --ignored
+```
+
+- Pause running job at partition boundary
+- Resume paused job from checkpoint
+- Checkpoint persistence verification
+- ETA preservation across pause/resume
+- State transition validation (pause non-running fails)
+- Tenant isolation for pause/resume operations
 
 ## Architecture
 
@@ -275,10 +333,15 @@ tracing_subscriber::registry()
 
 ## Future Enhancements (P1)
 
-- **Idempotency Keys**: Prevent duplicate execution creation
 - **Execution Timeouts**: Auto-transition to Timeout state after deadline
 - **Cancellation Support**: Graceful shutdown with cancel() method
-- **Metrics**: Prometheus metrics for execution counts, durations, errors
+
+## Implemented Features
+
+- **Idempotency Keys**: Prevent duplicate execution creation ✓
+- **Backfill Pause/Resume**: Pause at partition boundaries, resume from checkpoint ✓
+- **ETA Calculation**: EWMA-based estimation with persistence ✓
+- **Prometheus Metrics**: Low-cardinality metrics for jobs, partitions, ETA distribution ✓
 
 ## Documentation
 

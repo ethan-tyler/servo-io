@@ -16,6 +16,7 @@ Each runbook follows a consistent structure to minimize Mean Time to Resolution 
 | **Database** | [Database Slow](database-slow.md) | Critical | All SLOs |
 | **Data Quality** | [Data Quality Failures](data-quality-failures.md) | Warning | Data Quality |
 | **Traffic** | [No Traffic](no-traffic.md) | Critical | All SLOs |
+| **Backfill** | [Backfill Operations](backfill-operations.md) | Warning | Workflow Duration |
 
 ## Runbook Structure
 

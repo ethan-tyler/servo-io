@@ -1813,7 +1813,7 @@ impl PostgresStorage {
     /// Validate backfill job state
     fn validate_backfill_state(state: &str) -> Result<()> {
         match state {
-            "pending" | "running" | "completed" | "failed" | "cancelled" => Ok(()),
+            "pending" | "running" | "paused" | "resuming" | "completed" | "failed" | "cancelled" => Ok(()),
             _ => Err(crate::Error::ValidationError(format!(
                 "Invalid backfill state: {}",
                 state
@@ -1923,7 +1923,8 @@ impl PostgresStorage {
                            execution_strategy, partition_start, partition_end, partition_keys,
                            total_partitions, completed_partitions, failed_partitions, skipped_partitions,
                            include_upstream, error_message, created_by, created_at, started_at,
-                           completed_at, heartbeat_at, version
+                           completed_at, heartbeat_at, version, paused_at, checkpoint_partition_key,
+                           estimated_completion_at, avg_partition_duration_ms
                     FROM backfill_jobs
                     WHERE id = $1
                     "#,
@@ -2031,7 +2032,8 @@ impl PostgresStorage {
                                execution_strategy, partition_start, partition_end, partition_keys,
                                total_partitions, completed_partitions, failed_partitions, skipped_partitions,
                                include_upstream, error_message, created_by, created_at, started_at,
-                               completed_at, heartbeat_at, version
+                               completed_at, heartbeat_at, version, paused_at, checkpoint_partition_key,
+                               estimated_completion_at, avg_partition_duration_ms
                         FROM backfill_jobs
                         WHERE state = $1
                         ORDER BY created_at DESC
@@ -2051,7 +2053,8 @@ impl PostgresStorage {
                                execution_strategy, partition_start, partition_end, partition_keys,
                                total_partitions, completed_partitions, failed_partitions, skipped_partitions,
                                include_upstream, error_message, created_by, created_at, started_at,
-                               completed_at, heartbeat_at, version
+                               completed_at, heartbeat_at, version, paused_at, checkpoint_partition_key,
+                               estimated_completion_at, avg_partition_duration_ms
                         FROM backfill_jobs
                         ORDER BY created_at DESC
                         LIMIT $1 OFFSET $2
@@ -2065,6 +2068,203 @@ impl PostgresStorage {
                 };
 
                 Ok(jobs)
+            })
+        })
+        .await
+    }
+
+    /// Atomically claim a pending backfill job for processing.
+    /// Uses FOR UPDATE SKIP LOCKED to prevent multiple executors from claiming the same job.
+    /// Returns None if no claimable jobs are available.
+    #[instrument(
+        skip(self, tenant_id),
+        fields(
+            db.system = "postgresql",
+            db.operation = "SELECT + UPDATE",
+            db.sql.table = "backfill_jobs",
+            tenant_id = %tenant_id.as_str(),
+            executor_id = %executor_id
+        )
+    )]
+    pub async fn claim_pending_backfill_job(
+        &self,
+        executor_id: &str,
+        stale_heartbeat_threshold_secs: i64,
+        tenant_id: &TenantId,
+    ) -> Result<Option<BackfillJobModel>> {
+        let _executor_id = executor_id; // Reserved for future use (e.g., tracking which executor owns the job)
+        let now = Utc::now();
+
+        self.with_tenant_context(tenant_id, |tx| {
+            Box::pin(async move {
+                // First, try to claim a pending/resuming job, or reclaim a running job with stale heartbeat
+                let job = sqlx::query_as::<_, BackfillJobModel>(
+                    r#"
+                    SELECT id, tenant_id, asset_id, asset_name, idempotency_key, state,
+                           execution_strategy, partition_start, partition_end, partition_keys,
+                           total_partitions, completed_partitions, failed_partitions, skipped_partitions,
+                           include_upstream, error_message, created_by, created_at, started_at,
+                           completed_at, heartbeat_at, version, paused_at, checkpoint_partition_key,
+                           estimated_completion_at, avg_partition_duration_ms
+                    FROM backfill_jobs
+                    WHERE (state = 'pending')
+                       OR (state = 'resuming')
+                       OR (state = 'running' AND heartbeat_at < $1 - ($2 || ' seconds')::interval)
+                    ORDER BY
+                        CASE WHEN state = 'pending' THEN 0
+                             WHEN state = 'resuming' THEN 1
+                             ELSE 2 END,
+                        created_at ASC
+                    LIMIT 1
+                    FOR UPDATE SKIP LOCKED
+                    "#,
+                )
+                .bind(now)
+                .bind(stale_heartbeat_threshold_secs)
+                .fetch_optional(&mut **tx)
+                .await
+                .map_err(map_db_error)?;
+
+                if let Some(job) = job {
+                    // Claim the job by transitioning to running (if pending/resuming) or updating heartbeat
+                    let new_state = if job.state == "pending" || job.state == "resuming" { "running" } else { &job.state };
+                    let started_at = if job.state == "pending" { Some(now) } else { job.started_at };
+                    // Clear paused_at when resuming
+                    let clear_paused = job.state == "resuming";
+
+                    sqlx::query(
+                        r#"
+                        UPDATE backfill_jobs
+                        SET state = $1,
+                            started_at = COALESCE($2, started_at),
+                            heartbeat_at = $3,
+                            paused_at = CASE WHEN $6 THEN NULL ELSE paused_at END,
+                            error_message = CASE
+                                WHEN $4 = 'running' AND state = 'running'
+                                THEN 'Reclaimed by executor after stale heartbeat'
+                                ELSE error_message
+                            END,
+                            version = version + 1
+                        WHERE id = $5
+                        "#,
+                    )
+                    .bind(new_state)
+                    .bind(started_at)
+                    .bind(now)
+                    .bind(&job.state)
+                    .bind(job.id)
+                    .bind(clear_paused)
+                    .execute(&mut **tx)
+                    .await
+                    .map_err(map_db_error)?;
+
+                    // Return the updated job
+                    let updated_job = sqlx::query_as::<_, BackfillJobModel>(
+                        r#"
+                        SELECT id, tenant_id, asset_id, asset_name, idempotency_key, state,
+                               execution_strategy, partition_start, partition_end, partition_keys,
+                               total_partitions, completed_partitions, failed_partitions, skipped_partitions,
+                               include_upstream, error_message, created_by, created_at, started_at,
+                               completed_at, heartbeat_at, version, paused_at, checkpoint_partition_key,
+                               estimated_completion_at, avg_partition_duration_ms
+                        FROM backfill_jobs
+                        WHERE id = $1
+                        "#,
+                    )
+                    .bind(job.id)
+                    .fetch_one(&mut **tx)
+                    .await
+                    .map_err(map_db_error)?;
+
+                    Ok(Some(updated_job))
+                } else {
+                    Ok(None)
+                }
+            })
+        })
+        .await
+    }
+
+    /// Claim a pending partition for execution within a job.
+    /// Uses FOR UPDATE SKIP LOCKED to prevent multiple executors from claiming the same partition.
+    #[instrument(
+        skip(self, tenant_id),
+        fields(
+            db.system = "postgresql",
+            db.operation = "SELECT + UPDATE",
+            db.sql.table = "backfill_partitions",
+            tenant_id = %tenant_id.as_str(),
+            job_id = %job_id
+        )
+    )]
+    pub async fn claim_pending_partition(
+        &self,
+        job_id: Uuid,
+        max_retries: i32,
+        tenant_id: &TenantId,
+    ) -> Result<Option<BackfillPartitionModel>> {
+        let now = Utc::now();
+
+        self.with_tenant_context(tenant_id, |tx| {
+            Box::pin(async move {
+                // Claim a pending partition (or failed partition under retry limit)
+                let partition = sqlx::query_as::<_, BackfillPartitionModel>(
+                    r#"
+                    SELECT id, backfill_job_id, partition_key, state, attempt_count,
+                           execution_id, error_message, duration_ms, started_at, completed_at, tenant_id
+                    FROM backfill_partitions
+                    WHERE backfill_job_id = $1
+                      AND ((state = 'pending')
+                           OR (state = 'failed' AND attempt_count < $2))
+                    ORDER BY
+                        CASE WHEN state = 'pending' THEN 0 ELSE 1 END,
+                        partition_key ASC
+                    LIMIT 1
+                    FOR UPDATE SKIP LOCKED
+                    "#,
+                )
+                .bind(job_id)
+                .bind(max_retries)
+                .fetch_optional(&mut **tx)
+                .await
+                .map_err(map_db_error)?;
+
+                if let Some(partition) = partition {
+                    // Claim by transitioning to running
+                    sqlx::query(
+                        r#"
+                        UPDATE backfill_partitions
+                        SET state = 'running',
+                            started_at = $1,
+                            attempt_count = attempt_count + 1,
+                            error_message = NULL
+                        WHERE id = $2
+                        "#,
+                    )
+                    .bind(now)
+                    .bind(partition.id)
+                    .execute(&mut **tx)
+                    .await
+                    .map_err(map_db_error)?;
+
+                    // Return updated partition
+                    let updated = sqlx::query_as::<_, BackfillPartitionModel>(
+                        r#"
+                        SELECT id, backfill_job_id, partition_key, state, attempt_count,
+                               execution_id, error_message, duration_ms, started_at, completed_at, tenant_id
+                        FROM backfill_partitions
+                        WHERE id = $1
+                        "#,
+                    )
+                    .bind(partition.id)
+                    .fetch_one(&mut **tx)
+                    .await
+                    .map_err(map_db_error)?;
+
+                    Ok(Some(updated))
+                } else {
+                    Ok(None)
+                }
             })
         })
         .await
@@ -2338,7 +2538,8 @@ impl PostgresStorage {
                            execution_strategy, partition_start, partition_end, partition_keys,
                            total_partitions, completed_partitions, failed_partitions, skipped_partitions,
                            include_upstream, error_message, created_by, created_at, started_at,
-                           completed_at, heartbeat_at, version
+                           completed_at, heartbeat_at, version, paused_at, checkpoint_partition_key,
+                           estimated_completion_at, avg_partition_duration_ms
                     FROM backfill_jobs
                     WHERE idempotency_key = $1
                     "#,
@@ -2354,7 +2555,7 @@ impl PostgresStorage {
         .await
     }
 
-    /// Find an active (pending or running) backfill job for a specific asset/partition.
+    /// Find an active (pending, running, paused, or resuming) backfill job for a specific asset/partition.
     /// Used to prevent duplicate backfills while one is still active.
     #[instrument(
         skip(self, tenant_id),
@@ -2382,10 +2583,11 @@ impl PostgresStorage {
                            execution_strategy, partition_start, partition_end, partition_keys,
                            total_partitions, completed_partitions, failed_partitions, skipped_partitions,
                            include_upstream, error_message, created_by, created_at, started_at,
-                           completed_at, heartbeat_at, version
+                           completed_at, heartbeat_at, version, paused_at, checkpoint_partition_key,
+                           estimated_completion_at, avg_partition_duration_ms
                     FROM backfill_jobs
                     WHERE asset_id = $1
-                      AND state IN ('pending', 'running')
+                      AND state IN ('pending', 'running', 'paused', 'resuming')
                       AND partition_keys @> $2::jsonb
                     ORDER BY created_at DESC
                     LIMIT 1
@@ -2406,7 +2608,9 @@ impl PostgresStorage {
     /// Validate state transition for backfill jobs.
     /// Allowed transitions:
     ///   pending -> running, cancelled
-    ///   running -> completed, failed, cancelled
+    ///   running -> completed, failed, cancelled, paused
+    ///   paused -> resuming, cancelled
+    ///   resuming -> running, cancelled
     /// Returns error if transition is not allowed.
     fn validate_backfill_state_transition(from: &str, to: &str) -> Result<()> {
         let valid = matches!(
@@ -2416,6 +2620,11 @@ impl PostgresStorage {
                 | ("running", "completed")
                 | ("running", "failed")
                 | ("running", "cancelled")
+                | ("running", "paused")
+                | ("paused", "resuming")
+                | ("paused", "cancelled")
+                | ("resuming", "running")
+                | ("resuming", "cancelled")
         );
 
         if valid {
@@ -2498,6 +2707,616 @@ impl PostgresStorage {
                     return Err(crate::Error::NotFound(format!(
                         "Backfill job {} not found in state '{}'",
                         job_id, from_state_owned
+                    )));
+                }
+
+                Ok(())
+            })
+        })
+        .await
+    }
+
+    /// Cancel a backfill job
+    ///
+    /// Transitions the job to cancelled state. Only pending or running jobs can be cancelled.
+    /// Also marks all pending partitions as skipped.
+    #[instrument(
+        skip(self, tenant_id),
+        fields(
+            db.system = "postgresql",
+            db.operation = "UPDATE",
+            db.sql.table = "backfill_jobs",
+            tenant_id = %tenant_id.as_str(),
+            job_id = %job_id
+        )
+    )]
+    pub async fn cancel_backfill_job(
+        &self,
+        job_id: Uuid,
+        reason: Option<&str>,
+        tenant_id: &TenantId,
+    ) -> Result<()> {
+        let reason = reason.map(|s| s.to_string());
+        let now = Utc::now();
+
+        self.with_tenant_context(tenant_id, |tx| {
+            Box::pin(async move {
+                // Get current job state
+                let job = sqlx::query_as::<_, BackfillJobModel>(
+                    r#"
+                    SELECT id, tenant_id, asset_id, asset_name, idempotency_key, state,
+                           execution_strategy, partition_start, partition_end, partition_keys,
+                           total_partitions, completed_partitions, failed_partitions, skipped_partitions,
+                           include_upstream, error_message, created_by, created_at, started_at,
+                           completed_at, heartbeat_at, version, paused_at, checkpoint_partition_key,
+                           estimated_completion_at, avg_partition_duration_ms
+                    FROM backfill_jobs
+                    WHERE id = $1
+                    FOR UPDATE
+                    "#,
+                )
+                .bind(job_id)
+                .fetch_optional(&mut **tx)
+                .await
+                .map_err(map_db_error)?
+                .ok_or_else(|| crate::Error::NotFound(format!("Backfill job {} not found", job_id)))?;
+
+                // Validate transition
+                if job.state != "pending" && job.state != "running" && job.state != "paused" && job.state != "resuming" {
+                    return Err(crate::Error::ValidationError(format!(
+                        "Cannot cancel job in state '{}'. Only pending, running, paused, or resuming jobs can be cancelled.",
+                        job.state
+                    )));
+                }
+
+                let error_message = reason.unwrap_or_else(|| "Cancelled by user".to_string());
+
+                // Update job to cancelled
+                sqlx::query(
+                    r#"
+                    UPDATE backfill_jobs
+                    SET state = 'cancelled',
+                        error_message = $1,
+                        completed_at = $2,
+                        version = version + 1
+                    WHERE id = $3
+                    "#,
+                )
+                .bind(&error_message)
+                .bind(now)
+                .bind(job_id)
+                .execute(&mut **tx)
+                .await
+                .map_err(map_db_error)?;
+
+                // Mark all pending partitions as skipped
+                sqlx::query(
+                    r#"
+                    UPDATE backfill_partitions
+                    SET state = 'skipped',
+                        completed_at = $1,
+                        error_message = 'Job cancelled'
+                    WHERE backfill_job_id = $2 AND state = 'pending'
+                    "#,
+                )
+                .bind(now)
+                .bind(job_id)
+                .execute(&mut **tx)
+                .await
+                .map_err(map_db_error)?;
+
+                Ok(())
+            })
+        })
+        .await
+    }
+
+    /// Check if a backfill job has been cancelled
+    ///
+    /// Useful for executors to check before processing each partition
+    pub async fn is_backfill_job_cancelled(
+        &self,
+        job_id: Uuid,
+        tenant_id: &TenantId,
+    ) -> Result<bool> {
+        self.with_tenant_context(tenant_id, |tx| {
+            Box::pin(async move {
+                let state: Option<(String,)> = sqlx::query_as(
+                    r#"SELECT state FROM backfill_jobs WHERE id = $1"#,
+                )
+                .bind(job_id)
+                .fetch_optional(&mut **tx)
+                .await
+                .map_err(map_db_error)?;
+
+                Ok(state.map(|(s,)| s == "cancelled").unwrap_or(false))
+            })
+        })
+        .await
+    }
+
+    /// Check if a backfill job has been paused
+    ///
+    /// Useful for executors to check before processing each partition
+    pub async fn is_backfill_job_paused(
+        &self,
+        job_id: Uuid,
+        tenant_id: &TenantId,
+    ) -> Result<bool> {
+        self.with_tenant_context(tenant_id, |tx| {
+            Box::pin(async move {
+                let state: Option<(String,)> = sqlx::query_as(
+                    r#"SELECT state FROM backfill_jobs WHERE id = $1"#,
+                )
+                .bind(job_id)
+                .fetch_optional(&mut **tx)
+                .await
+                .map_err(map_db_error)?;
+
+                Ok(state.map(|(s,)| s == "paused").unwrap_or(false))
+            })
+        })
+        .await
+    }
+
+    /// Pause a running backfill job
+    ///
+    /// Transitions the job to paused state. The job will stop processing new partitions
+    /// at the next partition boundary. The checkpoint_partition_key is set to the last
+    /// completed partition for resumption.
+    #[instrument(
+        skip(self, tenant_id),
+        fields(
+            db.system = "postgresql",
+            db.operation = "UPDATE",
+            db.sql.table = "backfill_jobs",
+            tenant_id = %tenant_id.as_str(),
+            job_id = %job_id
+        )
+    )]
+    pub async fn pause_backfill_job(
+        &self,
+        job_id: Uuid,
+        tenant_id: &TenantId,
+    ) -> Result<()> {
+        let now = Utc::now();
+
+        self.with_tenant_context(tenant_id, |tx| {
+            Box::pin(async move {
+                // Get current job state
+                let state: Option<(String,)> = sqlx::query_as(
+                    r#"SELECT state FROM backfill_jobs WHERE id = $1 FOR UPDATE"#,
+                )
+                .bind(job_id)
+                .fetch_optional(&mut **tx)
+                .await
+                .map_err(map_db_error)?;
+
+                let current_state = state
+                    .map(|(s,)| s)
+                    .ok_or_else(|| crate::Error::NotFound(format!("Backfill job {} not found", job_id)))?;
+
+                if current_state != "running" {
+                    return Err(crate::Error::ValidationError(format!(
+                        "Cannot pause job in state '{}'. Only running jobs can be paused.",
+                        current_state
+                    )));
+                }
+
+                // Get the last completed partition as checkpoint
+                let last_completed: Option<(String,)> = sqlx::query_as(
+                    r#"
+                    SELECT partition_key
+                    FROM backfill_partitions
+                    WHERE backfill_job_id = $1 AND state = 'completed'
+                    ORDER BY completed_at DESC
+                    LIMIT 1
+                    "#,
+                )
+                .bind(job_id)
+                .fetch_optional(&mut **tx)
+                .await
+                .map_err(map_db_error)?;
+
+                let checkpoint = last_completed.map(|(pk,)| pk);
+
+                // Update job to paused
+                sqlx::query(
+                    r#"
+                    UPDATE backfill_jobs
+                    SET state = 'paused',
+                        paused_at = $1,
+                        checkpoint_partition_key = $2,
+                        heartbeat_at = $1,
+                        version = version + 1
+                    WHERE id = $3
+                    "#,
+                )
+                .bind(now)
+                .bind(&checkpoint)
+                .bind(job_id)
+                .execute(&mut **tx)
+                .await
+                .map_err(map_db_error)?;
+
+                Ok(())
+            })
+        })
+        .await
+    }
+
+    /// Resume a paused backfill job
+    ///
+    /// Transitions the job to resuming state. The executor will pick it up
+    /// and continue from the checkpoint.
+    #[instrument(
+        skip(self, tenant_id),
+        fields(
+            db.system = "postgresql",
+            db.operation = "UPDATE",
+            db.sql.table = "backfill_jobs",
+            tenant_id = %tenant_id.as_str(),
+            job_id = %job_id
+        )
+    )]
+    pub async fn resume_backfill_job(
+        &self,
+        job_id: Uuid,
+        tenant_id: &TenantId,
+    ) -> Result<()> {
+        let now = Utc::now();
+
+        self.with_tenant_context(tenant_id, |tx| {
+            Box::pin(async move {
+                // Get current job state
+                let state: Option<(String,)> = sqlx::query_as(
+                    r#"SELECT state FROM backfill_jobs WHERE id = $1 FOR UPDATE"#,
+                )
+                .bind(job_id)
+                .fetch_optional(&mut **tx)
+                .await
+                .map_err(map_db_error)?;
+
+                let current_state = state
+                    .map(|(s,)| s)
+                    .ok_or_else(|| crate::Error::NotFound(format!("Backfill job {} not found", job_id)))?;
+
+                if current_state != "paused" {
+                    return Err(crate::Error::ValidationError(format!(
+                        "Cannot resume job in state '{}'. Only paused jobs can be resumed.",
+                        current_state
+                    )));
+                }
+
+                // Update job to resuming (executor will pick it up)
+                sqlx::query(
+                    r#"
+                    UPDATE backfill_jobs
+                    SET state = 'resuming',
+                        heartbeat_at = $1,
+                        version = version + 1
+                    WHERE id = $2
+                    "#,
+                )
+                .bind(now)
+                .bind(job_id)
+                .execute(&mut **tx)
+                .await
+                .map_err(map_db_error)?;
+
+                Ok(())
+            })
+        })
+        .await
+    }
+
+    /// Update backfill job heartbeat timestamp
+    #[instrument(
+        skip(self, tenant_id),
+        fields(
+            db.system = "postgresql",
+            db.operation = "UPDATE",
+            db.sql.table = "backfill_jobs",
+            tenant_id = %tenant_id.as_str(),
+            job_id = %job_id
+        )
+    )]
+    pub async fn update_backfill_job_heartbeat(
+        &self,
+        job_id: Uuid,
+        tenant_id: &TenantId,
+    ) -> Result<()> {
+        let now = Utc::now();
+
+        self.with_tenant_context(tenant_id, |tx| {
+            Box::pin(async move {
+                sqlx::query(
+                    r#"
+                    UPDATE backfill_jobs
+                    SET heartbeat_at = $1
+                    WHERE id = $2 AND state = 'running'
+                    "#,
+                )
+                .bind(now)
+                .bind(job_id)
+                .execute(&mut **tx)
+                .await
+                .map_err(map_db_error)?;
+
+                Ok(())
+            })
+        })
+        .await
+    }
+
+    /// Update backfill job progress counters
+    #[instrument(
+        skip(self, tenant_id),
+        fields(
+            db.system = "postgresql",
+            db.operation = "UPDATE",
+            db.sql.table = "backfill_jobs",
+            tenant_id = %tenant_id.as_str(),
+            job_id = %job_id
+        )
+    )]
+    pub async fn update_backfill_job_progress(
+        &self,
+        job_id: Uuid,
+        completed: i32,
+        failed: i32,
+        skipped: i32,
+        tenant_id: &TenantId,
+    ) -> Result<()> {
+        let now = Utc::now();
+
+        self.with_tenant_context(tenant_id, |tx| {
+            Box::pin(async move {
+                sqlx::query(
+                    r#"
+                    UPDATE backfill_jobs
+                    SET completed_partitions = $1,
+                        failed_partitions = $2,
+                        skipped_partitions = $3,
+                        heartbeat_at = $4
+                    WHERE id = $5 AND state = 'running'
+                    "#,
+                )
+                .bind(completed)
+                .bind(failed)
+                .bind(skipped)
+                .bind(now)
+                .bind(job_id)
+                .execute(&mut **tx)
+                .await
+                .map_err(map_db_error)?;
+
+                Ok(())
+            })
+        })
+        .await
+    }
+
+    /// Update backfill job progress counters with ETA calculation
+    ///
+    /// This extended version also updates ETA-related fields:
+    /// - avg_partition_duration_ms: EWMA of partition execution time
+    /// - estimated_completion_at: Calculated from remaining partitions and avg duration
+    /// - checkpoint_partition_key: Last completed partition for resumption
+    #[instrument(
+        skip(self, tenant_id),
+        fields(
+            db.system = "postgresql",
+            db.operation = "UPDATE",
+            db.sql.table = "backfill_jobs",
+            tenant_id = %tenant_id.as_str(),
+            job_id = %job_id
+        )
+    )]
+    pub async fn update_backfill_job_progress_with_eta(
+        &self,
+        job_id: Uuid,
+        progress: &BackfillProgressUpdate,
+        tenant_id: &TenantId,
+    ) -> Result<()> {
+        let now = Utc::now();
+
+        self.with_tenant_context(tenant_id, |tx| {
+            let progress = progress.clone();
+            Box::pin(async move {
+                sqlx::query(
+                    r#"
+                    UPDATE backfill_jobs
+                    SET completed_partitions = $1,
+                        failed_partitions = $2,
+                        skipped_partitions = $3,
+                        heartbeat_at = $4,
+                        avg_partition_duration_ms = COALESCE($5, avg_partition_duration_ms),
+                        estimated_completion_at = $6,
+                        checkpoint_partition_key = COALESCE($7, checkpoint_partition_key)
+                    WHERE id = $8 AND state = 'running'
+                    "#,
+                )
+                .bind(progress.completed)
+                .bind(progress.failed)
+                .bind(progress.skipped)
+                .bind(now)
+                .bind(progress.avg_partition_duration_ms)
+                .bind(progress.estimated_completion_at)
+                .bind(&progress.checkpoint_partition_key)
+                .bind(job_id)
+                .execute(&mut **tx)
+                .await
+                .map_err(map_db_error)?;
+
+                Ok(())
+            })
+        })
+        .await
+    }
+
+    /// Transition a backfill partition to a new state
+    #[instrument(
+        skip(self, tenant_id),
+        fields(
+            db.system = "postgresql",
+            db.operation = "UPDATE",
+            db.sql.table = "backfill_partitions",
+            tenant_id = %tenant_id.as_str(),
+            partition_id = %partition_id
+        )
+    )]
+    pub async fn transition_backfill_partition_state(
+        &self,
+        partition_id: Uuid,
+        from_state: &str,
+        to_state: &str,
+        error_message: Option<&str>,
+        tenant_id: &TenantId,
+    ) -> Result<()> {
+        let to_state = to_state.to_string();
+        let from_state_owned = from_state.to_string();
+        let error_message = error_message.map(|s| s.to_string());
+        let now = Utc::now();
+
+        self.with_tenant_context(tenant_id, |tx| {
+            Box::pin(async move {
+                let started_at = if to_state == "running" {
+                    Some(now)
+                } else {
+                    None
+                };
+
+                let result = sqlx::query(
+                    r#"
+                    UPDATE backfill_partitions
+                    SET state = $1,
+                        error_message = COALESCE($2, error_message),
+                        started_at = COALESCE($3, started_at),
+                        attempt_count = attempt_count + CASE WHEN $1 = 'running' THEN 1 ELSE 0 END
+                    WHERE id = $4 AND state = $5
+                    "#,
+                )
+                .bind(&to_state)
+                .bind(&error_message)
+                .bind(started_at)
+                .bind(partition_id)
+                .bind(&from_state_owned)
+                .execute(&mut **tx)
+                .await
+                .map_err(map_db_error)?;
+
+                if result.rows_affected() == 0 {
+                    return Err(crate::Error::NotFound(format!(
+                        "Backfill partition {} not found in state '{}'",
+                        partition_id, from_state_owned
+                    )));
+                }
+
+                Ok(())
+            })
+        })
+        .await
+    }
+
+    /// Mark a backfill partition as completed
+    #[instrument(
+        skip(self, tenant_id),
+        fields(
+            db.system = "postgresql",
+            db.operation = "UPDATE",
+            db.sql.table = "backfill_partitions",
+            tenant_id = %tenant_id.as_str(),
+            partition_id = %partition_id
+        )
+    )]
+    pub async fn complete_backfill_partition(
+        &self,
+        partition_id: Uuid,
+        execution_id: Option<Uuid>,
+        duration_ms: i64,
+        tenant_id: &TenantId,
+    ) -> Result<()> {
+        let now = Utc::now();
+
+        self.with_tenant_context(tenant_id, |tx| {
+            Box::pin(async move {
+                let result = sqlx::query(
+                    r#"
+                    UPDATE backfill_partitions
+                    SET state = 'completed',
+                        execution_id = $1,
+                        duration_ms = $2,
+                        completed_at = $3
+                    WHERE id = $4 AND state = 'running'
+                    "#,
+                )
+                .bind(execution_id)
+                .bind(duration_ms)
+                .bind(now)
+                .bind(partition_id)
+                .execute(&mut **tx)
+                .await
+                .map_err(map_db_error)?;
+
+                if result.rows_affected() == 0 {
+                    return Err(crate::Error::NotFound(format!(
+                        "Backfill partition {} not found in running state",
+                        partition_id
+                    )));
+                }
+
+                Ok(())
+            })
+        })
+        .await
+    }
+
+    /// Mark a backfill partition as failed
+    #[instrument(
+        skip(self, tenant_id),
+        fields(
+            db.system = "postgresql",
+            db.operation = "UPDATE",
+            db.sql.table = "backfill_partitions",
+            tenant_id = %tenant_id.as_str(),
+            partition_id = %partition_id
+        )
+    )]
+    pub async fn fail_backfill_partition(
+        &self,
+        partition_id: Uuid,
+        error_message: &str,
+        duration_ms: i64,
+        tenant_id: &TenantId,
+    ) -> Result<()> {
+        let now = Utc::now();
+        let error_message = error_message.to_string();
+
+        self.with_tenant_context(tenant_id, |tx| {
+            Box::pin(async move {
+                let result = sqlx::query(
+                    r#"
+                    UPDATE backfill_partitions
+                    SET state = 'failed',
+                        error_message = $1,
+                        duration_ms = $2,
+                        completed_at = $3
+                    WHERE id = $4 AND state = 'running'
+                    "#,
+                )
+                .bind(&error_message)
+                .bind(duration_ms)
+                .bind(now)
+                .bind(partition_id)
+                .execute(&mut **tx)
+                .await
+                .map_err(map_db_error)?;
+
+                if result.rows_affected() == 0 {
+                    return Err(crate::Error::NotFound(format!(
+                        "Backfill partition {} not found in running state",
+                        partition_id
                     )));
                 }
 
