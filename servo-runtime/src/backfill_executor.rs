@@ -4,6 +4,10 @@
 //! by executing each partition sequentially. It uses atomic claiming with
 //! FOR UPDATE SKIP LOCKED to safely support multiple executor instances.
 
+use crate::metrics::{
+    BACKFILL_JOB_CANCELLATION_TOTAL, BACKFILL_JOB_CLAIM_TOTAL, BACKFILL_PARTITION_CLAIM_TOTAL,
+    BACKFILL_PARTITION_COMPLETION_TOTAL, BACKFILL_PARTITION_DURATION,
+};
 use crate::orchestrator::ExecutionOrchestrator;
 use crate::Result;
 use servo_storage::{BackfillJobModel, BackfillPartitionModel, PostgresStorage, TenantId};
@@ -112,9 +116,20 @@ impl BackfillExecutor {
 
             match claimed_job {
                 Some(job) => {
+                    // Determine if this was a new claim or reclaim (based on previous state)
+                    let claim_type = if job.started_at.is_some() {
+                        "reclaim"
+                    } else {
+                        "new"
+                    };
+                    BACKFILL_JOB_CLAIM_TOTAL
+                        .with_label_values(&[claim_type, "success"])
+                        .inc();
+
                     info!(
                         job_id = %job.id,
                         asset = %job.asset_name,
+                        claim_type = claim_type,
                         "Claimed backfill job"
                     );
                     match self.process_job(job).await {
@@ -126,6 +141,9 @@ impl BackfillExecutor {
                 }
                 None => {
                     // No more jobs to claim
+                    BACKFILL_JOB_CLAIM_TOTAL
+                        .with_label_values(&["new", "none_available"])
+                        .inc();
                     break;
                 }
             }
@@ -153,6 +171,9 @@ impl BackfillExecutor {
                 .map_err(|e| crate::Error::Internal(e.to_string()))?;
 
             if is_cancelled {
+                BACKFILL_JOB_CANCELLATION_TOTAL
+                    .with_label_values(&["detected_during_processing"])
+                    .inc();
                 info!(
                     job_id = %job.id,
                     completed = completed_count,
@@ -174,25 +195,53 @@ impl BackfillExecutor {
 
             match claimed_partition {
                 Some(partition) => {
+                    // Track partition claim type (new vs retry)
+                    let claim_type = if partition.attempt_count > 1 {
+                        "retry"
+                    } else {
+                        "new"
+                    };
+                    BACKFILL_PARTITION_CLAIM_TOTAL
+                        .with_label_values(&[claim_type, "success"])
+                        .inc();
+
                     // Small delay between partitions
                     if completed_count > 0 || failed_count > 0 {
                         tokio::time::sleep(self.config.partition_delay).await;
                     }
 
-                    // Execute the partition
+                    // Execute the partition and track duration
+                    let partition_start = std::time::Instant::now();
                     match self.execute_partition(&job, &partition).await {
                         Ok(_) => {
+                            let duration_secs = partition_start.elapsed().as_secs_f64();
+                            BACKFILL_PARTITION_DURATION
+                                .with_label_values(&["completed"])
+                                .observe(duration_secs);
+                            BACKFILL_PARTITION_COMPLETION_TOTAL
+                                .with_label_values(&["completed"])
+                                .inc();
+
                             completed_count += 1;
                             info!(
                                 partition_key = %partition.partition_key,
                                 completed = completed_count,
                                 total = job.total_partitions,
+                                duration_secs = duration_secs,
                                 "Partition completed"
                             );
                         }
                         Err(e) => {
+                            let duration_secs = partition_start.elapsed().as_secs_f64();
+                            BACKFILL_PARTITION_DURATION
+                                .with_label_values(&["failed"])
+                                .observe(duration_secs);
+
                             // Check if we've exceeded max retries
                             if partition.attempt_count >= self.config.max_partition_retries {
+                                BACKFILL_PARTITION_COMPLETION_TOTAL
+                                    .with_label_values(&["failed"])
+                                    .inc();
                                 failed_count += 1;
                                 warn!(
                                     partition_key = %partition.partition_key,
