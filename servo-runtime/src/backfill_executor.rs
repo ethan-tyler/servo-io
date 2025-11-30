@@ -1,8 +1,8 @@
 //! Backfill executor for processing partition backfill jobs
 //!
 //! The BackfillExecutor polls for pending backfill jobs and processes them
-//! by executing each partition sequentially. It handles state transitions,
-//! progress tracking, and error handling.
+//! by executing each partition sequentially. It uses atomic claiming with
+//! FOR UPDATE SKIP LOCKED to safely support multiple executor instances.
 
 use crate::orchestrator::ExecutionOrchestrator;
 use crate::Result;
@@ -26,6 +26,10 @@ pub struct BackfillExecutorConfig {
     pub max_partition_retries: i32,
     /// Delay between partition executions (default: 100ms)
     pub partition_delay: Duration,
+    /// Stale heartbeat threshold - jobs not updated in this time can be reclaimed (default: 120 seconds)
+    pub stale_heartbeat_threshold: Duration,
+    /// Timeout per partition execution (default: 5 minutes)
+    pub partition_timeout: Duration,
 }
 
 impl Default for BackfillExecutorConfig {
@@ -36,6 +40,8 @@ impl Default for BackfillExecutorConfig {
             heartbeat_interval: Duration::from_secs(30),
             max_partition_retries: 3,
             partition_delay: Duration::from_millis(100),
+            stale_heartbeat_threshold: Duration::from_secs(120),
+            partition_timeout: Duration::from_secs(300),
         }
     }
 }
@@ -46,6 +52,7 @@ pub struct BackfillExecutor {
     orchestrator: ExecutionOrchestrator,
     config: BackfillExecutorConfig,
     tenant_id: TenantId,
+    executor_id: String,
 }
 
 impl BackfillExecutor {
@@ -56,18 +63,21 @@ impl BackfillExecutor {
         config: BackfillExecutorConfig,
         tenant_id: TenantId,
     ) -> Self {
+        // Generate unique executor ID for this instance
+        let executor_id = format!("executor-{}", Uuid::new_v4());
         Self {
             storage,
             orchestrator,
             config,
             tenant_id,
+            executor_id,
         }
     }
 
     /// Start the executor loop (runs until cancelled)
-    #[instrument(skip(self), fields(tenant_id = %self.tenant_id.as_str()))]
+    #[instrument(skip(self), fields(tenant_id = %self.tenant_id.as_str(), executor_id = %self.executor_id))]
     pub async fn run(&self) -> Result<()> {
-        info!("Starting backfill executor");
+        info!("Starting backfill executor {}", self.executor_id);
         let mut poll_interval = interval(self.config.poll_interval);
 
         loop {
@@ -76,7 +86,7 @@ impl BackfillExecutor {
             match self.poll_and_process_jobs().await {
                 Ok(processed) => {
                     if processed > 0 {
-                        info!("Processed {} backfill jobs", processed);
+                        debug!("Processed {} backfill jobs", processed);
                     }
                 }
                 Err(e) => {
@@ -86,21 +96,37 @@ impl BackfillExecutor {
         }
     }
 
-    /// Poll for pending jobs and process them
+    /// Poll for pending jobs and process them using atomic claiming
     async fn poll_and_process_jobs(&self) -> Result<usize> {
-        // Get pending jobs that need processing
-        let pending_jobs = self
-            .storage
-            .list_backfill_jobs(&self.tenant_id, Some("pending"), 10, 0)
-            .await
-            .map_err(|e| crate::Error::Internal(e.to_string()))?;
-
+        let stale_threshold_secs = self.config.stale_heartbeat_threshold.as_secs() as i64;
         let mut processed = 0;
-        for job in pending_jobs.into_iter().take(self.config.max_concurrent_jobs) {
-            match self.process_job(job).await {
-                Ok(_) => processed += 1,
-                Err(e) => {
-                    error!("Failed to process backfill job: {}", e);
+
+        // Try to claim and process jobs up to max_concurrent_jobs
+        for _ in 0..self.config.max_concurrent_jobs {
+            // Atomically claim a job
+            let claimed_job = self
+                .storage
+                .claim_pending_backfill_job(&self.executor_id, stale_threshold_secs, &self.tenant_id)
+                .await
+                .map_err(|e| crate::Error::Internal(e.to_string()))?;
+
+            match claimed_job {
+                Some(job) => {
+                    info!(
+                        job_id = %job.id,
+                        asset = %job.asset_name,
+                        "Claimed backfill job"
+                    );
+                    match self.process_job(job).await {
+                        Ok(_) => processed += 1,
+                        Err(e) => {
+                            error!("Failed to process backfill job: {}", e);
+                        }
+                    }
+                }
+                None => {
+                    // No more jobs to claim
+                    break;
                 }
             }
         }
@@ -108,90 +134,98 @@ impl BackfillExecutor {
         Ok(processed)
     }
 
-    /// Process a single backfill job
+    /// Process a single backfill job (already claimed and in running state)
     #[instrument(skip(self), fields(job_id = %job.id, asset = %job.asset_name))]
     async fn process_job(&self, job: BackfillJobModel) -> Result<()> {
         info!("Processing backfill job {} for asset {}", job.id, job.asset_name);
 
-        // Transition job to running state
-        self.storage
-            .transition_backfill_job_state(job.id, "pending", "running", None, &self.tenant_id)
-            .await
-            .map_err(|e| crate::Error::Internal(e.to_string()))?;
+        let mut completed_count = job.completed_partitions;
+        let mut failed_count = job.failed_partitions;
+        let skipped_count = job.skipped_partitions;
 
-        // Get all partitions for this job
-        let partitions = self
-            .storage
-            .list_backfill_partitions(job.id, &self.tenant_id)
-            .await
-            .map_err(|e| crate::Error::Internal(e.to_string()))?;
-
-        let total_partitions = partitions.len();
-        let mut completed_count = 0;
-        let mut failed_count = 0;
-        let mut skipped_count = 0;
-
-        // Process each partition sequentially
-        for partition in partitions {
-            // Skip already completed/failed partitions (for resume scenarios)
-            if partition.state == "completed" {
-                completed_count += 1;
-                continue;
-            }
-            if partition.state == "failed" && partition.attempt_count >= self.config.max_partition_retries {
-                failed_count += 1;
-                continue;
-            }
-            if partition.state == "skipped" {
-                skipped_count += 1;
-                continue;
-            }
-
-            // Small delay between partitions to avoid overwhelming the system
-            if completed_count > 0 || failed_count > 0 {
-                tokio::time::sleep(self.config.partition_delay).await;
-            }
-
-            // Update heartbeat
+        // Process partitions using atomic claiming
+        loop {
+            // Update heartbeat before claiming next partition
             self.update_heartbeat(job.id).await?;
 
-            // Execute the partition
-            match self.execute_partition(&job, &partition).await {
-                Ok(_) => {
-                    completed_count += 1;
-                    info!(
-                        "Partition {} completed ({}/{})",
-                        partition.partition_key,
-                        completed_count,
-                        total_partitions
-                    );
+            // Atomically claim a partition
+            let claimed_partition = self
+                .storage
+                .claim_pending_partition(job.id, self.config.max_partition_retries, &self.tenant_id)
+                .await
+                .map_err(|e| crate::Error::Internal(e.to_string()))?;
+
+            match claimed_partition {
+                Some(partition) => {
+                    // Small delay between partitions
+                    if completed_count > 0 || failed_count > 0 {
+                        tokio::time::sleep(self.config.partition_delay).await;
+                    }
+
+                    // Execute the partition
+                    match self.execute_partition(&job, &partition).await {
+                        Ok(_) => {
+                            completed_count += 1;
+                            info!(
+                                partition_key = %partition.partition_key,
+                                completed = completed_count,
+                                total = job.total_partitions,
+                                "Partition completed"
+                            );
+                        }
+                        Err(e) => {
+                            // Check if we've exceeded max retries
+                            if partition.attempt_count >= self.config.max_partition_retries {
+                                failed_count += 1;
+                                warn!(
+                                    partition_key = %partition.partition_key,
+                                    attempts = partition.attempt_count,
+                                    error = %e,
+                                    "Partition failed permanently (max retries exceeded)"
+                                );
+                            } else {
+                                warn!(
+                                    partition_key = %partition.partition_key,
+                                    attempts = partition.attempt_count,
+                                    max_retries = self.config.max_partition_retries,
+                                    error = %e,
+                                    "Partition failed, will retry"
+                                );
+                            }
+                        }
+                    }
+
+                    // Update job progress (idempotent - always set absolute values)
+                    self.update_job_progress(job.id, completed_count, failed_count, skipped_count)
+                        .await?;
                 }
-                Err(e) => {
-                    failed_count += 1;
-                    warn!(
-                        "Partition {} failed: {} ({} failures so far)",
-                        partition.partition_key, e, failed_count
-                    );
+                None => {
+                    // No more partitions to process - job is done
+                    break;
                 }
             }
-
-            // Update job progress
-            self.update_job_progress(job.id, completed_count, failed_count, skipped_count)
-                .await?;
         }
 
         // Determine final job state
+        let total_processed = completed_count + failed_count + skipped_count;
         let final_state = if failed_count > 0 && completed_count == 0 {
             "failed"
-        } else if failed_count > 0 {
-            // Some succeeded, some failed - mark as completed with errors in message
+        } else if total_processed >= job.total_partitions {
             "completed"
         } else {
+            // Still have unprocessed partitions - shouldn't happen but handle gracefully
+            warn!(
+                "Job {} has unprocessed partitions: {} of {} done",
+                job.id, total_processed, job.total_partitions
+            );
             "completed"
         };
 
         let error_message = if failed_count > 0 {
-            Some(format!("{} of {} partitions failed", failed_count, total_partitions))
+            Some(format!(
+                "{} of {} partitions failed after {} retries each",
+                failed_count, job.total_partitions, self.config.max_partition_retries
+            ))
         } else {
             None
         };
@@ -209,15 +243,19 @@ impl BackfillExecutor {
             .map_err(|e| crate::Error::Internal(e.to_string()))?;
 
         info!(
-            "Backfill job {} finished: {} completed, {} failed, {} skipped",
-            job.id, completed_count, failed_count, skipped_count
+            job_id = %job.id,
+            completed = completed_count,
+            failed = failed_count,
+            skipped = skipped_count,
+            final_state = final_state,
+            "Backfill job finished"
         );
 
         Ok(())
     }
 
-    /// Execute a single partition
-    #[instrument(skip(self, job), fields(partition_key = %partition.partition_key))]
+    /// Execute a single partition (already claimed and in running state)
+    #[instrument(skip(self, job), fields(partition_key = %partition.partition_key, attempt = partition.attempt_count))]
     async fn execute_partition(
         &self,
         job: &BackfillJobModel,
@@ -225,22 +263,10 @@ impl BackfillExecutor {
     ) -> Result<()> {
         let start = std::time::Instant::now();
 
-        // Transition partition to running
-        self.storage
-            .transition_backfill_partition_state(
-                partition.id,
-                &partition.state,
-                "running",
-                None,
-                &self.tenant_id,
-            )
-            .await
-            .map_err(|e| crate::Error::Internal(e.to_string()))?;
-
-        // Execute the asset for this partition
-        // This creates and runs an execution for the asset with the partition key as context
+        // Execute the asset for this partition with idempotency key
+        let idempotency_key = format!("backfill:{}:{}:{}", job.id, partition.partition_key, partition.attempt_count);
         let execution_result = self
-            .execute_asset_partition(job.asset_id, &partition.partition_key)
+            .execute_asset_partition(job.asset_id, &partition.partition_key, &idempotency_key)
             .await;
 
         let duration_ms = start.elapsed().as_millis() as i64;
@@ -260,8 +286,10 @@ impl BackfillExecutor {
                 Ok(())
             }
             Err(e) => {
-                // Mark partition as failed
-                self.storage
+                // Mark partition as failed (will be retried if under max_retries)
+                // If the DB update fails, log it but still return the original execution error
+                if let Err(db_err) = self
+                    .storage
                     .fail_backfill_partition(
                         partition.id,
                         &e.to_string(),
@@ -269,25 +297,26 @@ impl BackfillExecutor {
                         &self.tenant_id,
                     )
                     .await
-                    .map_err(|e| crate::Error::Internal(e.to_string()))?;
+                {
+                    warn!("Failed to update partition failure state: {}", db_err);
+                }
                 Err(e)
             }
         }
     }
 
-    /// Execute an asset for a specific partition
+    /// Execute an asset for a specific partition with idempotency
     async fn execute_asset_partition(
         &self,
         asset_id: Uuid,
         partition_key: &str,
+        idempotency_key: &str,
     ) -> Result<Uuid> {
-        // Look up the workflow associated with this asset
-        // For now, we assume the asset name maps to a workflow name
-        // In a full implementation, this would query the asset's associated workflow
-
         debug!(
-            "Executing asset {} for partition {}",
-            asset_id, partition_key
+            asset_id = %asset_id,
+            partition_key = %partition_key,
+            idempotency_key = %idempotency_key,
+            "Executing asset partition"
         );
 
         // Get the asset to find its workflow
@@ -311,21 +340,16 @@ impl BackfillExecutor {
                 crate::Error::NotFound(format!("No workflow found for asset '{}'", asset.name))
             })?;
 
-        // Start execution with partition context
+        // Start execution with idempotency key to prevent duplicates on retry
         let execution_id = self
             .orchestrator
-            .start_execution(
-                workflow.id,
-                &self.tenant_id,
-                Some(format!("backfill:{}", partition_key)),
-            )
+            .start_execution(workflow.id, &self.tenant_id, Some(idempotency_key.to_string()))
             .await
             .map_err(|e| crate::Error::Execution(e.to_string()))?;
 
         // Wait for execution to complete (with timeout)
-        let timeout = Duration::from_secs(300); // 5 minute timeout per partition
         let result = self
-            .wait_for_execution(execution_id, timeout)
+            .wait_for_execution(execution_id, self.config.partition_timeout)
             .await?;
 
         if result {
@@ -372,7 +396,7 @@ impl BackfillExecutor {
             .map_err(|e| crate::Error::Internal(e.to_string()))
     }
 
-    /// Update job progress counters
+    /// Update job progress counters (idempotent - always sets absolute values)
     async fn update_job_progress(
         &self,
         job_id: Uuid,
@@ -415,6 +439,8 @@ mod tests {
         assert_eq!(config.heartbeat_interval, Duration::from_secs(30));
         assert_eq!(config.max_partition_retries, 3);
         assert_eq!(config.partition_delay, Duration::from_millis(100));
+        assert_eq!(config.stale_heartbeat_threshold, Duration::from_secs(120));
+        assert_eq!(config.partition_timeout, Duration::from_secs(300));
     }
 
     #[test]
@@ -425,8 +451,23 @@ mod tests {
             heartbeat_interval: Duration::from_secs(60),
             max_partition_retries: 5,
             partition_delay: Duration::from_millis(200),
+            stale_heartbeat_threshold: Duration::from_secs(300),
+            partition_timeout: Duration::from_secs(600),
         };
         assert_eq!(config.max_concurrent_jobs, 5);
         assert_eq!(config.max_partition_retries, 5);
+        assert_eq!(config.stale_heartbeat_threshold, Duration::from_secs(300));
+    }
+
+    #[test]
+    fn test_idempotency_key_format() {
+        let job_id = Uuid::new_v4();
+        let partition_key = "2024-01-15";
+        let attempt = 2;
+        let key = format!("backfill:{}:{}:{}", job_id, partition_key, attempt);
+
+        assert!(key.starts_with("backfill:"));
+        assert!(key.contains(partition_key));
+        assert!(key.ends_with(":2"));
     }
 }
