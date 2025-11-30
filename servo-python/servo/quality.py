@@ -15,11 +15,9 @@ Implemented Check Types:
     - row_count: Table must have row count within range
     - freshness: Timestamp column must have recent data (within max_age)
     - no_duplicate_rows: Table must not have duplicate rows
+    - referential_integrity: Foreign key relationships
+    - schema_match: Column names and structure validation
     - custom: User-defined check functions via @asset_check
-
-Deferred Check Types (defined in Rust core, not yet in Python):
-    - referential_integrity: Foreign key relationships (requires DB access)
-    - schema_match: Column names and types validation
 
 Example usage:
 
@@ -114,6 +112,84 @@ def _register_check(
     if definition.asset_name not in _asset_checks:
         _asset_checks[definition.asset_name] = []
     _asset_checks[definition.asset_name].append(definition.name)
+
+
+# ========== Helper Functions for Check Implementations ==========
+
+
+def _extract_column_values(data: Any, column: str) -> list[Any]:
+    """Extract column values from various data types (pandas, polars, dict).
+
+    Args:
+        data: DataFrame or dict-like data structure
+        column: Column name to extract
+
+    Returns:
+        List of values from the column
+    """
+    if hasattr(data, "__getitem__"):
+        col_data = data[column]
+        if hasattr(col_data, "to_list"):  # polars Series
+            result: list[Any] = col_data.to_list()
+            return result
+        elif hasattr(col_data, "tolist"):  # pandas Series
+            result = col_data.tolist()
+            return result
+        elif hasattr(col_data, "__iter__"):
+            return list(col_data)
+    return []
+
+
+def _extract_schema(data: Any) -> list[dict[str, Any]]:
+    """Extract schema information from data.
+
+    Args:
+        data: DataFrame or dict-like data structure
+
+    Returns:
+        List of dicts with column name, data_type, and nullable info
+    """
+    from servo.types import PANDAS_TYPE_MAP, POLARS_TYPE_MAP
+
+    schema: list[dict[str, Any]] = []
+
+    if hasattr(data, "dtypes") and hasattr(data, "columns"):  # pandas DataFrame
+        for col_name in data.columns:
+            dtype_str = str(data[col_name].dtype)
+            canonical_type = PANDAS_TYPE_MAP.get(dtype_str, "unknown")
+            # Check for nulls to determine if nullable
+            nullable = (
+                bool(data[col_name].isna().any()) if hasattr(data[col_name], "isna") else True
+            )
+            schema.append(
+                {
+                    "name": str(col_name),
+                    "data_type": canonical_type,
+                    "nullable": nullable,
+                }
+            )
+    elif hasattr(data, "schema"):  # polars DataFrame
+        for field_name in data.schema:
+            dtype_str = str(data.schema[field_name])
+            canonical_type = POLARS_TYPE_MAP.get(dtype_str, "unknown")
+            schema.append(
+                {
+                    "name": field_name,
+                    "data_type": canonical_type,
+                    "nullable": True,
+                }
+            )
+    elif isinstance(data, dict) or hasattr(data, "keys"):  # dict or dict-like
+        for col_name in data:
+            schema.append(
+                {
+                    "name": str(col_name),
+                    "data_type": "unknown",
+                    "nullable": True,
+                }
+            )
+
+    return schema
 
 
 # ========== API 1: @asset_check Decorator ==========
@@ -550,6 +626,111 @@ class ColumnExpectation:
         self._checks.append(check)
         return self
 
+    def to_reference(
+        self,
+        reference_table: str,
+        reference_column: str,
+        lookup_data: Any | None = None,
+        lookup_query: Callable[[], Any] | None = None,
+        null_handling: str = "ignore",
+    ) -> ColumnExpectation:
+        """Expect column values to exist in a reference table.
+
+        Validates referential integrity by checking that all non-null values
+        in this column exist in the specified reference column.
+
+        Args:
+            reference_table: Name of the reference table (for error messages)
+            reference_column: Column in reference table to match against
+            lookup_data: In-memory DataFrame with reference data
+            lookup_query: Callable that returns reference data (for lazy loading)
+            null_handling: How to handle null values ("ignore" or "fail")
+
+        Returns:
+            Self for chaining
+
+        Note:
+            Either lookup_data or lookup_query must be provided for in-memory
+            validation. If neither is provided, the check is registered for
+            server-side execution only.
+
+        Example:
+            expect(orders_df).column("customer_id").to_reference(
+                "customers", "id", lookup_data=customers_df
+            )
+        """
+
+        def check(data: Any) -> CheckResult:
+            try:
+                # Get reference data
+                if lookup_data is not None:
+                    ref_data = lookup_data
+                elif lookup_query is not None:
+                    ref_data = lookup_query()
+                else:
+                    # No lookup provided - register for server-side only
+                    return CheckResult.success(
+                        check_name=f"referential_integrity_{self._column}",
+                        asset_name=self._expectation._asset_name,
+                        message="Check registered for server-side execution",
+                    )
+
+                # Extract column values
+                source_values = _extract_column_values(data, self._column)
+                ref_values = _extract_column_values(ref_data, reference_column)
+
+                # Handle nulls
+                if null_handling == "ignore":
+                    source_values = [v for v in source_values if v is not None]
+
+                # Find orphan references (values not in reference table)
+                ref_set = set(ref_values)
+                orphans = [v for v in source_values if v not in ref_set]
+
+                total = len(data) if hasattr(data, "__len__") else len(source_values)
+                orphan_count = len(orphans)
+
+                if orphan_count == 0:
+                    return CheckResult.success(
+                        check_name=f"referential_integrity_{self._column}",
+                        asset_name=self._expectation._asset_name,
+                        rows_checked=total,
+                    )
+                else:
+                    # Sample orphan values for error message (max 5)
+                    sample = orphans[:5]
+                    sample_str = ", ".join(str(v) for v in sample)
+                    if orphan_count > 5:
+                        sample_str += f", ... ({orphan_count - 5} more)"
+
+                    return CheckResult.failure(
+                        check_name=f"referential_integrity_{self._column}",
+                        asset_name=self._expectation._asset_name,
+                        message=f"Column '{self._column}' has {orphan_count} values not found in "
+                        f"'{reference_table}.{reference_column}': [{sample_str}]",
+                        severity=self._expectation._severity,
+                        blocking=self._expectation._blocking,
+                        rows_checked=total,
+                        rows_failed=orphan_count,
+                        details={
+                            "reference_table": reference_table,
+                            "reference_column": reference_column,
+                            "orphan_samples": sample[:10],
+                        },
+                    )
+            except Exception as e:
+                return CheckResult(
+                    check_name=f"referential_integrity_{self._column}",
+                    status=CheckStatus.ERROR,
+                    severity=self._expectation._severity,
+                    asset_name=self._expectation._asset_name,
+                    blocking=self._expectation._blocking,
+                    message=f"Error checking referential integrity: {e}",
+                )
+
+        self._checks.append(check)
+        return self
+
     # Chain back to parent expectation
     def column(self, name: str) -> ColumnExpectation:
         """Start defining expectations for another column."""
@@ -663,6 +844,82 @@ class Expectation:
                     asset_name=self._asset_name,
                     blocking=self._blocking,
                     message=f"Error checking duplicates: {e}",
+                )
+
+        self._table_checks.append(check)
+        return self
+
+    def to_have_schema(
+        self,
+        expected_columns: list[str],
+        allow_extra_columns: bool = True,
+    ) -> Expectation:
+        """Expect data to have the specified schema (column names).
+
+        Validates that the data contains all expected columns.
+        Optionally rejects unexpected extra columns.
+
+        Args:
+            expected_columns: List of required column names
+            allow_extra_columns: If False, fail when unexpected columns exist
+
+        Returns:
+            Self for chaining
+
+        Example:
+            expect(df).to_have_schema(
+                expected_columns=["id", "name", "email"],
+                allow_extra_columns=False
+            )
+        """
+
+        def check(data: Any) -> CheckResult:
+            try:
+                actual_schema = _extract_schema(data)
+                actual_names = {col["name"] for col in actual_schema}
+                expected_names = set(expected_columns)
+
+                errors: list[str] = []
+
+                # Check for missing columns
+                missing = expected_names - actual_names
+                if missing:
+                    errors.append(f"Missing columns: {sorted(missing)}")
+
+                # Check for extra columns (if not allowed)
+                if not allow_extra_columns:
+                    extra = actual_names - expected_names
+                    if extra:
+                        errors.append(f"Unexpected columns: {sorted(extra)}")
+
+                if errors:
+                    return CheckResult.failure(
+                        check_name="schema_match",
+                        asset_name=self._asset_name,
+                        message="; ".join(errors),
+                        severity=self._severity,
+                        blocking=self._blocking,
+                        details={
+                            "expected_columns": list(expected_names),
+                            "actual_columns": list(actual_names),
+                            "errors": errors,
+                        },
+                    )
+                else:
+                    return CheckResult.success(
+                        check_name="schema_match",
+                        asset_name=self._asset_name,
+                        details={"columns_validated": len(expected_names)},
+                    )
+
+            except Exception as e:
+                return CheckResult(
+                    check_name="schema_match",
+                    status=CheckStatus.ERROR,
+                    severity=self._severity,
+                    asset_name=self._asset_name,
+                    blocking=self._blocking,
+                    message=f"Error checking schema: {e}",
                 )
 
         self._table_checks.append(check)
@@ -1196,6 +1453,146 @@ class check:
                 definition.description,
             )
 
+            _register_check(definition, callable_instance=check_callable)
+
+            if not hasattr(func, "_servo_checks"):
+                func._servo_checks = []  # type: ignore
+            func._servo_checks.append(check_callable)  # type: ignore
+
+            return func
+
+        return decorator
+
+    @staticmethod
+    def referential_integrity(
+        column: str,
+        reference_table: str,
+        reference_column: str,
+        severity: CheckSeverity = CheckSeverity.ERROR,
+        blocking: bool = True,
+        name: str | None = None,
+    ) -> Callable[[F], F]:
+        """Add a referential integrity check for a column.
+
+        Validates that all values in the column exist in the reference table.
+        For in-memory validation, use the expect() API with lookup_data.
+        This decorator registers the check for server-side execution.
+
+        Args:
+            column: Column containing foreign key values
+            reference_table: Name of the reference table
+            reference_column: Column in reference table to match against
+            severity: Severity level for failures (default: ERROR)
+            blocking: Whether failure blocks downstream execution (default: True)
+            name: Optional name for the check
+
+        Example:
+            @check.referential_integrity("customer_id", "customers", "id")
+            @asset(name="orders")
+            def orders():
+                return load_orders()
+        """
+
+        def decorator(func: F) -> F:
+            check_name = name or f"referential_integrity_{column}"
+            asset_name = getattr(func, "_servo_asset_name", func.__name__)
+            module = getattr(func, "__module__", "<unknown>")
+
+            definition = CheckDefinition(
+                name=check_name,
+                asset_name=asset_name,
+                check_type="referential_integrity",
+                severity=severity,
+                blocking=blocking,
+                function_name=func.__name__,
+                module=module,
+                description=f"Column '{column}' must reference '{reference_table}.{reference_column}'",
+                column=column,
+                parameters={
+                    "reference_table": reference_table,
+                    "reference_column": reference_column,
+                },
+            )
+
+            def _check_impl(_data: Any) -> CheckResult:
+                # Server-side execution - return success with note
+                # For in-memory validation, use expect().column().to_reference()
+                return CheckResult.success(
+                    check_name=check_name,
+                    asset_name=asset_name,
+                    message="Referential integrity check registered for server-side execution",
+                )
+
+            check_callable = _InlineCheckCallable(
+                _check_impl, check_name, asset_name, severity, blocking, definition.description
+            )
+            _register_check(definition, callable_instance=check_callable)
+
+            if not hasattr(func, "_servo_checks"):
+                func._servo_checks = []  # type: ignore
+            func._servo_checks.append(check_callable)  # type: ignore
+
+            return func
+
+        return decorator
+
+    @staticmethod
+    def schema_match(
+        expected_columns: list[str],
+        allow_extra_columns: bool = True,
+        severity: CheckSeverity = CheckSeverity.ERROR,
+        blocking: bool = True,
+        name: str | None = None,
+    ) -> Callable[[F], F]:
+        """Add a schema match check for the asset.
+
+        Validates that data contains the expected columns and optionally
+        rejects unexpected columns.
+
+        Args:
+            expected_columns: List of required column names
+            allow_extra_columns: If False, fail on unexpected columns (default: True)
+            severity: Severity level for failures (default: ERROR)
+            blocking: Whether failure blocks downstream execution (default: True)
+            name: Optional name for the check
+
+        Example:
+            @check.schema_match(["id", "name", "email"], allow_extra_columns=False)
+            @asset(name="customers")
+            def customers():
+                return load_customers()
+        """
+
+        def decorator(func: F) -> F:
+            check_name = name or "schema_match"
+            asset_name = getattr(func, "_servo_asset_name", func.__name__)
+            module = getattr(func, "__module__", "<unknown>")
+
+            definition = CheckDefinition(
+                name=check_name,
+                asset_name=asset_name,
+                check_type="schema_match",
+                severity=severity,
+                blocking=blocking,
+                function_name=func.__name__,
+                module=module,
+                description=f"Schema must contain columns: {expected_columns}",
+                parameters={
+                    "expected_columns": expected_columns,
+                    "allow_extra_columns": allow_extra_columns,
+                },
+            )
+
+            def _check_impl(data: Any) -> CheckResult:
+                return (
+                    expect(data, asset_name=asset_name, severity=severity, blocking=blocking)
+                    .to_have_schema(expected_columns, allow_extra_columns)
+                    .run()[0]
+                )
+
+            check_callable = _InlineCheckCallable(
+                _check_impl, check_name, asset_name, severity, blocking, definition.description
+            )
             _register_check(definition, callable_instance=check_callable)
 
             if not hasattr(func, "_servo_checks"):

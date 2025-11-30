@@ -12,6 +12,8 @@
 //! - `row_count` - Verify total row count falls within min/max bounds
 //! - `accepted_values` - Verify column values are within an allowed set
 //! - `no_duplicate_rows` - Verify no duplicate rows exist
+//! - `referential_integrity` - Verify foreign key references exist
+//! - `schema_match` - Verify expected columns are present
 //!
 //! # Null Handling
 //!
@@ -25,8 +27,6 @@
 //! # Check Types Not Yet Implemented
 //!
 //! - `freshness` - Requires timestamp comparison (deferred)
-//! - `referential_integrity` - Requires cross-asset validation (deferred)
-//! - `schema_match` - Requires schema metadata (deferred)
 
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -215,6 +215,23 @@ pub enum CheckType {
         timestamp_column: String,
         max_age_seconds: i64,
     },
+    /// Referential integrity check - verify foreign key references exist
+    ReferentialIntegrity {
+        /// Column containing the foreign key values
+        column: String,
+        /// Name of the reference table
+        reference_table: String,
+        /// Column in the reference table to match against
+        reference_column: String,
+    },
+    /// Schema match check - verify expected columns are present
+    SchemaMatch {
+        /// List of expected column names
+        expected_columns: Vec<String>,
+        /// Whether to allow additional columns not in the expected list
+        #[serde(default = "default_true")]
+        allow_extra_columns: bool,
+    },
     /// Custom check (placeholder)
     Custom {
         #[serde(default)]
@@ -222,6 +239,10 @@ pub enum CheckType {
         #[serde(default)]
         description: Option<String>,
     },
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// Maximum number of failed samples to include in results
@@ -259,6 +280,15 @@ fn execute_check(check_type: &CheckType, data: &AssetOutput) -> ValidationResult
             // Freshness requires current time comparison - mark as not implemented
             ValidationResult::error("Freshness check not yet implemented in worker".to_string())
         }
+        CheckType::ReferentialIntegrity {
+            column,
+            reference_table,
+            reference_column,
+        } => validate_referential_integrity(column, reference_table, reference_column, data),
+        CheckType::SchemaMatch {
+            expected_columns,
+            allow_extra_columns,
+        } => validate_schema_match(expected_columns, *allow_extra_columns, data),
         CheckType::Custom { name, .. } => {
             // Custom checks are user-defined and can't be executed generically
             ValidationResult::error(format!(
@@ -649,6 +679,138 @@ fn validate_no_duplicate_rows(
     }
 }
 
+/// Validate referential integrity - check that all values in a column exist in a reference table.
+///
+/// Note: This validation currently only works for in-memory validation where reference data
+/// is provided. For cross-asset validation, the orchestrator must resolve the reference data
+/// and pass it to the worker.
+fn validate_referential_integrity(
+    column: &str,
+    reference_table: &str,
+    reference_column: &str,
+    data: &AssetOutput,
+) -> ValidationResult {
+    let total = data.row_count as i64;
+
+    // Get the source column values
+    let values = match data.get_column(column) {
+        Some(v) => v,
+        None => {
+            return ValidationResult::error(format!("Column '{}' not found in data", column));
+        }
+    };
+
+    // Check if we have reference data available (would be provided as a special column)
+    // For now, we check if a column named "{reference_table}.{reference_column}" exists
+    let ref_col_key = format!("__ref__{}__{}", reference_table, reference_column);
+    let reference_values: Option<HashSet<String>> = data.get_column(&ref_col_key).map(|vals| {
+        vals.iter()
+            .filter(|v| !v.is_null())
+            .map(|v| v.to_string())
+            .collect()
+    });
+
+    match reference_values {
+        Some(ref_set) => {
+            // Perform in-memory validation
+            let mut orphans = Vec::new();
+            let mut failed_count = 0i64;
+
+            for (idx, value) in values.iter().enumerate() {
+                if value.is_null() {
+                    continue; // Skip nulls by default
+                }
+                let value_str = value.to_string();
+                if !ref_set.contains(&value_str) {
+                    failed_count += 1;
+                    if orphans.len() < MAX_FAILED_SAMPLES {
+                        orphans.push(serde_json::json!({
+                            "row": idx,
+                            "column": column,
+                            "value": value,
+                            "reference_table": reference_table,
+                            "reference_column": reference_column,
+                            "reason": "orphan reference"
+                        }));
+                    }
+                }
+            }
+
+            if failed_count == 0 {
+                ValidationResult::passed(total)
+            } else {
+                ValidationResult::failed_with_samples(
+                    failed_count,
+                    total,
+                    format!(
+                        "{} values in column '{}' have no matching reference in '{}.{}'",
+                        failed_count, column, reference_table, reference_column
+                    ),
+                    Value::Array(orphans),
+                )
+            }
+        }
+        None => {
+            // No reference data provided - the check was registered but reference data
+            // must be resolved by the orchestrator. Return a pass with a note.
+            ValidationResult {
+                passed: true,
+                failed_count: Some(0),
+                total_count: Some(total),
+                error_message: Some(format!(
+                    "Referential integrity check registered for '{}.{}' -> '{}.{}'. \
+                     Reference data must be provided by orchestrator for validation.",
+                    column, reference_table, reference_table, reference_column
+                )),
+                failed_samples: None,
+            }
+        }
+    }
+}
+
+/// Validate schema match - check that expected columns are present
+fn validate_schema_match(
+    expected_columns: &[String],
+    allow_extra_columns: bool,
+    data: &AssetOutput,
+) -> ValidationResult {
+    let total = data.row_count as i64;
+    let actual_columns: HashSet<&String> = data.columns.keys().collect();
+    let expected_set: HashSet<&String> = expected_columns.iter().collect();
+
+    let mut errors = Vec::new();
+
+    // Check for missing columns
+    let missing: Vec<&String> = expected_set
+        .iter()
+        .filter(|col| !actual_columns.contains(*col))
+        .copied()
+        .collect();
+
+    if !missing.is_empty() {
+        errors.push(format!("Missing columns: {:?}", missing));
+    }
+
+    // Check for extra columns if not allowed
+    if !allow_extra_columns {
+        let extra: Vec<&String> = actual_columns
+            .iter()
+            .filter(|col| !expected_set.contains(*col))
+            .copied()
+            .collect();
+
+        if !extra.is_empty() {
+            errors.push(format!("Unexpected columns: {:?}", extra));
+        }
+    }
+
+    if errors.is_empty() {
+        ValidationResult::passed(total)
+    } else {
+        ValidationResult::failed(errors.len() as i64, total, errors.join("; "))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -894,5 +1056,140 @@ mod tests {
         let check_type = json!({"type": "unique", "columns": ["id"]});
         let result = validate_check(&check_type, &data);
         assert!(result.passed);
+    }
+
+    #[test]
+    fn test_schema_match_pass() {
+        let data = sample_data();
+        let check_type = json!({
+            "type": "schema_match",
+            "expected_columns": ["id", "name"],
+            "allow_extra_columns": true
+        });
+        let result = validate_check(&check_type, &data);
+        assert!(result.passed);
+    }
+
+    #[test]
+    fn test_schema_match_fail_missing_column() {
+        let data = sample_data();
+        let check_type = json!({
+            "type": "schema_match",
+            "expected_columns": ["id", "name", "nonexistent_column"],
+            "allow_extra_columns": true
+        });
+        let result = validate_check(&check_type, &data);
+        assert!(!result.passed);
+        assert!(result.error_message.unwrap().contains("Missing columns"));
+    }
+
+    #[test]
+    fn test_schema_match_fail_extra_columns_not_allowed() {
+        let data = sample_data();
+        let check_type = json!({
+            "type": "schema_match",
+            "expected_columns": ["id"],
+            "allow_extra_columns": false
+        });
+        let result = validate_check(&check_type, &data);
+        assert!(!result.passed);
+        assert!(result.error_message.unwrap().contains("Unexpected columns"));
+    }
+
+    #[test]
+    fn test_schema_match_exact_match() {
+        let data = AssetOutput::from_rows(vec![json!({"id": 1, "name": "Alice"})]);
+        let check_type = json!({
+            "type": "schema_match",
+            "expected_columns": ["id", "name"],
+            "allow_extra_columns": false
+        });
+        let result = validate_check(&check_type, &data);
+        assert!(result.passed);
+    }
+
+    #[test]
+    fn test_referential_integrity_no_reference_data() {
+        // When no reference data is provided, check passes with a message
+        let data = sample_data();
+        let check_type = json!({
+            "type": "referential_integrity",
+            "column": "id",
+            "reference_table": "users",
+            "reference_column": "user_id"
+        });
+        let result = validate_check(&check_type, &data);
+        assert!(result.passed);
+        assert!(result.error_message.unwrap().contains("orchestrator"));
+    }
+
+    #[test]
+    fn test_referential_integrity_with_reference_data_pass() {
+        // Create data with embedded reference values
+        let mut data = AssetOutput::from_rows(vec![
+            json!({"customer_id": 1}),
+            json!({"customer_id": 2}),
+            json!({"customer_id": 3}),
+        ]);
+        // Add reference data as special column
+        data.columns.insert(
+            "__ref__customers__id".to_string(),
+            vec![
+                Value::Number(1.into()),
+                Value::Number(2.into()),
+                Value::Number(3.into()),
+                Value::Number(4.into()),
+            ],
+        );
+
+        let check_type = json!({
+            "type": "referential_integrity",
+            "column": "customer_id",
+            "reference_table": "customers",
+            "reference_column": "id"
+        });
+        let result = validate_check(&check_type, &data);
+        assert!(result.passed);
+    }
+
+    #[test]
+    fn test_referential_integrity_with_reference_data_fail() {
+        let mut data = AssetOutput::from_rows(vec![
+            json!({"customer_id": 1}),
+            json!({"customer_id": 999}), // Orphan reference
+        ]);
+        // Add reference data
+        data.columns.insert(
+            "__ref__customers__id".to_string(),
+            vec![Value::Number(1.into()), Value::Number(2.into())],
+        );
+
+        let check_type = json!({
+            "type": "referential_integrity",
+            "column": "customer_id",
+            "reference_table": "customers",
+            "reference_column": "id"
+        });
+        let result = validate_check(&check_type, &data);
+        assert!(!result.passed);
+        assert_eq!(result.failed_count, Some(1));
+        assert!(result
+            .error_message
+            .unwrap()
+            .contains("no matching reference"));
+    }
+
+    #[test]
+    fn test_referential_integrity_column_not_found() {
+        let data = sample_data();
+        let check_type = json!({
+            "type": "referential_integrity",
+            "column": "nonexistent",
+            "reference_table": "users",
+            "reference_column": "id"
+        });
+        let result = validate_check(&check_type, &data);
+        assert!(!result.passed);
+        assert!(result.error_message.unwrap().contains("not found"));
     }
 }

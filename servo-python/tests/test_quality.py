@@ -50,8 +50,9 @@ class MockDataFrame:
 class MockColumn:
     """Mock column for testing."""
 
-    def __init__(self, values: list):
+    def __init__(self, values: list, dtype: str = "object"):
         self._values = values
+        self.dtype = dtype
 
     def __iter__(self):
         return iter(self._values)
@@ -107,6 +108,10 @@ class MockBooleanSeries:
 
     def sum(self):
         return sum(1 for v in self._values if v)
+
+    def any(self):
+        """Return True if any value is True."""
+        return any(self._values)
 
 
 class MockStringAccessor:
@@ -871,3 +876,263 @@ class TestErrorHandling:
         assert len(results) == 1
         assert results[0].status == CheckStatus.PASSED
         assert results[0].rows_checked == 0
+
+
+# ========== Test Referential Integrity Checks ==========
+
+
+class MockDataFrameWithColumns(MockDataFrame):
+    """Extended mock with columns attribute for schema extraction."""
+
+    @property
+    def columns(self):
+        return list(self._data.keys())
+
+    @property
+    def dtypes(self):
+        """Return mock dtypes dict (needed for pandas-like schema extraction)."""
+        return dict.fromkeys(self._data, "int64")
+
+    def keys(self):
+        """Return column names (for dict-like behavior)."""
+        return self._data.keys()
+
+
+class TestReferentialIntegrityChecks:
+    """Tests for referential integrity checks."""
+
+    def test_referential_integrity_pass(self):
+        """Test RI check passes when all references exist."""
+        orders = MockDataFrame({"customer_id": [1, 2, 3]})
+        customers = MockDataFrame({"id": [1, 2, 3, 4, 5]})
+
+        results = (
+            expect(orders, asset_name="orders")
+            .column("customer_id")
+            .to_reference("customers", "id", lookup_data=customers)
+            .run()
+        )
+        assert len(results) == 1
+        assert results[0].status == CheckStatus.PASSED
+
+    def test_referential_integrity_fail_orphans(self):
+        """Test RI check fails with orphan references."""
+        orders = MockDataFrame({"customer_id": [1, 2, 999]})
+        customers = MockDataFrame({"id": [1, 2, 3]})
+
+        results = (
+            expect(orders, asset_name="orders")
+            .column("customer_id")
+            .to_reference("customers", "id", lookup_data=customers)
+            .run()
+        )
+        assert len(results) == 1
+        assert results[0].status == CheckStatus.FAILED
+        assert results[0].rows_failed == 1
+        assert "999" in results[0].message
+
+    def test_referential_integrity_null_handling_ignore(self):
+        """Test RI check ignores nulls by default."""
+        orders = MockDataFrame({"customer_id": [1, None, 3]})
+        customers = MockDataFrame({"id": [1, 3]})
+
+        results = (
+            expect(orders, asset_name="orders")
+            .column("customer_id")
+            .to_reference("customers", "id", lookup_data=customers, null_handling="ignore")
+            .run()
+        )
+        assert len(results) == 1
+        assert results[0].status == CheckStatus.PASSED
+
+    def test_referential_integrity_multiple_orphans(self):
+        """Test RI check reports multiple orphans."""
+        orders = MockDataFrame({"customer_id": [1, 100, 200, 300, 400, 500, 600]})
+        customers = MockDataFrame({"id": [1]})
+
+        results = (
+            expect(orders, asset_name="orders")
+            .column("customer_id")
+            .to_reference("customers", "id", lookup_data=customers)
+            .run()
+        )
+        assert len(results) == 1
+        assert results[0].status == CheckStatus.FAILED
+        assert results[0].rows_failed == 6
+        assert "more" in results[0].message  # Should indicate more orphans
+
+    def test_referential_integrity_with_lookup_query(self):
+        """Test RI check with lazy lookup query."""
+        orders = MockDataFrame({"customer_id": [1, 2]})
+        customers = MockDataFrame({"id": [1, 2, 3]})
+
+        def get_customers():
+            return customers
+
+        results = (
+            expect(orders, asset_name="orders")
+            .column("customer_id")
+            .to_reference("customers", "id", lookup_query=get_customers)
+            .run()
+        )
+        assert len(results) == 1
+        assert results[0].status == CheckStatus.PASSED
+
+    def test_referential_integrity_no_lookup_server_side(self):
+        """Test RI check returns success message for server-side execution."""
+        orders = MockDataFrame({"customer_id": [1, 2]})
+
+        results = (
+            expect(orders, asset_name="orders")
+            .column("customer_id")
+            .to_reference("customers", "id")  # No lookup_data or lookup_query
+            .run()
+        )
+        assert len(results) == 1
+        assert results[0].status == CheckStatus.PASSED
+        assert "server-side" in results[0].message
+
+    def test_referential_integrity_decorator(self):
+        """Test check.referential_integrity decorator."""
+
+        @check.referential_integrity("customer_id", "customers", "id")
+        def orders():
+            return MockDataFrame({"customer_id": [1, 2, 3]})
+
+        # Check should be registered
+        checks = get_checks_for_asset("orders")
+        assert len(checks) == 1
+        assert checks[0].name == "referential_integrity_customer_id"
+        assert checks[0].check_type == "referential_integrity"
+
+    def test_referential_integrity_decorator_custom_name(self):
+        """Test RI decorator with custom name."""
+
+        @check.referential_integrity(
+            "user_id", "users", "id", name="fk_user", severity=CheckSeverity.WARNING
+        )
+        def posts():
+            return MockDataFrame({"user_id": [1]})
+
+        checks = get_checks_for_asset("posts")
+        assert checks[0].name == "fk_user"
+        assert checks[0].severity == CheckSeverity.WARNING
+
+
+# ========== Test Schema Match Checks ==========
+
+
+class TestSchemaMatchChecks:
+    """Tests for schema match checks."""
+
+    def test_schema_match_pass(self):
+        """Test schema match passes with expected columns."""
+        data = MockDataFrameWithColumns({"id": [1], "name": ["test"]})
+
+        results = expect(data, asset_name="test").to_have_schema(["id", "name"]).run()
+        assert len(results) == 1
+        assert results[0].status == CheckStatus.PASSED
+
+    def test_schema_match_fail_missing_column(self):
+        """Test schema match fails with missing column."""
+        data = MockDataFrameWithColumns({"id": [1]})
+
+        results = expect(data, asset_name="test").to_have_schema(["id", "name"]).run()
+        assert len(results) == 1
+        assert results[0].status == CheckStatus.FAILED
+        assert "name" in results[0].message
+        assert "Missing" in results[0].message
+
+    def test_schema_match_extra_columns_allowed(self):
+        """Test extra columns allowed by default."""
+        data = MockDataFrameWithColumns({"id": [1], "extra": [True]})
+
+        results = (
+            expect(data, asset_name="test").to_have_schema(["id"], allow_extra_columns=True).run()
+        )
+        assert len(results) == 1
+        assert results[0].status == CheckStatus.PASSED
+
+    def test_schema_match_extra_columns_not_allowed(self):
+        """Test fails when extra columns not allowed."""
+        data = MockDataFrameWithColumns({"id": [1], "extra": [True]})
+
+        results = (
+            expect(data, asset_name="test").to_have_schema(["id"], allow_extra_columns=False).run()
+        )
+        assert len(results) == 1
+        assert results[0].status == CheckStatus.FAILED
+        assert "extra" in results[0].message
+        assert "Unexpected" in results[0].message
+
+    def test_schema_match_multiple_missing(self):
+        """Test reports multiple missing columns."""
+        data = MockDataFrameWithColumns({"id": [1]})
+
+        results = (
+            expect(data, asset_name="test").to_have_schema(["id", "name", "email", "phone"]).run()
+        )
+        assert len(results) == 1
+        assert results[0].status == CheckStatus.FAILED
+        # Should mention all missing columns
+        assert "name" in results[0].message or "name" in str(results[0].details)
+
+    def test_schema_match_dict_data(self):
+        """Test schema match with dict data structure."""
+        data = {"id": [1, 2], "name": ["a", "b"]}
+
+        results = expect(data, asset_name="test").to_have_schema(["id", "name"]).run()
+        assert len(results) == 1
+        assert results[0].status == CheckStatus.PASSED
+
+    def test_schema_match_decorator(self):
+        """Test check.schema_match decorator."""
+
+        @check.schema_match(["id", "name", "email"])
+        def customers():
+            return MockDataFrameWithColumns({"id": [1], "name": ["test"], "email": ["a@b.com"]})
+
+        # Check should be registered
+        checks = get_checks_for_asset("customers")
+        assert len(checks) == 1
+        assert checks[0].name == "schema_match"
+        assert checks[0].check_type == "schema_match"
+
+    def test_schema_match_decorator_strict(self):
+        """Test schema_match decorator with strict mode."""
+
+        @check.schema_match(["id", "name"], allow_extra_columns=False, severity=CheckSeverity.ERROR)
+        def strict_table():
+            return MockDataFrameWithColumns({"id": [1], "name": ["test"]})
+
+        checks = get_checks_for_asset("strict_table")
+        assert len(checks) == 1
+        assert checks[0].parameters["allow_extra_columns"] is False
+
+    def test_schema_match_decorator_custom_name(self):
+        """Test schema_match decorator with custom name."""
+
+        @check.schema_match(["col1"], name="custom_schema_check")
+        def test_table():
+            return {}
+
+        checks = get_checks_for_asset("test_table")
+        assert checks[0].name == "custom_schema_check"
+
+    def test_schema_match_execution(self):
+        """Test schema_match decorator executes correctly."""
+
+        @check.schema_match(["id", "name"])
+        def test_asset_exec():
+            return MockDataFrameWithColumns({"id": [1], "name": ["test"]})
+
+        # The check callable should be registered
+        from servo.quality import _check_callables
+
+        check_callable = _check_callables.get("schema_match")
+        assert check_callable is not None
+
+        # Execute the check
+        data = MockDataFrameWithColumns({"id": [1], "name": ["test"]})
+        result = check_callable(data)
+        assert result.status == CheckStatus.PASSED
