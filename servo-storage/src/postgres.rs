@@ -1,6 +1,7 @@
 //! PostgreSQL storage implementation
 
 use crate::{models::*, Result, TenantId};
+use chrono::Utc;
 use futures::future::BoxFuture;
 use sqlx::{postgres::PgPoolOptions, PgPool, Postgres, Transaction};
 use std::time::Instant;
@@ -2353,6 +2354,159 @@ impl PostgresStorage {
         .await
     }
 
+    /// Find an active (pending or running) backfill job for a specific asset/partition.
+    /// Used to prevent duplicate backfills while one is still active.
+    #[instrument(
+        skip(self, tenant_id),
+        fields(
+            db.system = "postgresql",
+            db.operation = "SELECT",
+            db.sql.table = "backfill_jobs",
+            tenant_id = %tenant_id.as_str(),
+            asset_id = %asset_id
+        )
+    )]
+    pub async fn find_active_backfill_for_partition(
+        &self,
+        asset_id: Uuid,
+        partition_key: &str,
+        tenant_id: &TenantId,
+    ) -> Result<Option<BackfillJobModel>> {
+        let partition_key = partition_key.to_string();
+
+        self.with_tenant_context(tenant_id, |tx| {
+            Box::pin(async move {
+                let job = sqlx::query_as::<_, BackfillJobModel>(
+                    r#"
+                    SELECT id, tenant_id, asset_id, asset_name, idempotency_key, state,
+                           execution_strategy, partition_start, partition_end, partition_keys,
+                           total_partitions, completed_partitions, failed_partitions, skipped_partitions,
+                           include_upstream, error_message, created_by, created_at, started_at,
+                           completed_at, heartbeat_at, version
+                    FROM backfill_jobs
+                    WHERE asset_id = $1
+                      AND state IN ('pending', 'running')
+                      AND partition_keys @> $2::jsonb
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                    "#,
+                )
+                .bind(asset_id)
+                .bind(serde_json::json!([partition_key]))
+                .fetch_optional(&mut **tx)
+                .await
+                .map_err(map_db_error)?;
+
+                Ok(job)
+            })
+        })
+        .await
+    }
+
+    /// Validate state transition for backfill jobs.
+    /// Allowed transitions:
+    ///   pending -> running, cancelled
+    ///   running -> completed, failed, cancelled
+    /// Returns error if transition is not allowed.
+    fn validate_backfill_state_transition(from: &str, to: &str) -> Result<()> {
+        let valid = matches!(
+            (from, to),
+            ("pending", "running")
+                | ("pending", "cancelled")
+                | ("running", "completed")
+                | ("running", "failed")
+                | ("running", "cancelled")
+        );
+
+        if valid {
+            Ok(())
+        } else {
+            Err(crate::Error::ValidationError(format!(
+                "Invalid backfill state transition: {} -> {}",
+                from, to
+            )))
+        }
+    }
+
+    /// Update backfill job state with transition validation
+    #[instrument(
+        skip(self, tenant_id),
+        fields(
+            db.system = "postgresql",
+            db.operation = "UPDATE",
+            db.sql.table = "backfill_jobs",
+            tenant_id = %tenant_id.as_str(),
+            backfill_job_id = %job_id
+        )
+    )]
+    pub async fn transition_backfill_job_state(
+        &self,
+        job_id: Uuid,
+        from_state: &str,
+        to_state: &str,
+        error_message: Option<&str>,
+        tenant_id: &TenantId,
+    ) -> Result<()> {
+        Self::validate_backfill_state(from_state)?;
+        Self::validate_backfill_state(to_state)?;
+        Self::validate_backfill_state_transition(from_state, to_state)?;
+
+        let to_state = to_state.to_string();
+        let from_state_owned = from_state.to_string();
+        let error_message = error_message.map(|s| s.to_string());
+        let now = Utc::now();
+
+        self.with_tenant_context(tenant_id, |tx| {
+            Box::pin(async move {
+                let completed_at =
+                    if to_state == "completed" || to_state == "failed" || to_state == "cancelled" {
+                        Some(now)
+                    } else {
+                        None
+                    };
+
+                let started_at = if to_state == "running" {
+                    Some(now)
+                } else {
+                    None
+                };
+
+                let result = sqlx::query(
+                    r#"
+                    UPDATE backfill_jobs
+                    SET state = $1,
+                        error_message = COALESCE($2, error_message),
+                        started_at = COALESCE($3, started_at),
+                        completed_at = COALESCE($4, completed_at),
+                        heartbeat_at = $5,
+                        version = version + 1
+                    WHERE id = $6 AND state = $7
+                    "#,
+                )
+                .bind(&to_state)
+                .bind(&error_message)
+                .bind(started_at)
+                .bind(completed_at)
+                .bind(now)
+                .bind(job_id)
+                .bind(&from_state_owned)
+                .execute(&mut **tx)
+                .await
+                .map_err(map_db_error)?;
+
+                if result.rows_affected() == 0 {
+                    return Err(crate::Error::NotFound(format!(
+                        "Backfill job {} not found in state '{}'",
+                        job_id, from_state_owned
+                    )));
+                }
+
+                Ok(())
+            })
+        })
+        .await
+    }
+
     /// List recent check results for an asset
     #[instrument(
         skip(self, tenant_id),
@@ -2616,6 +2770,39 @@ mod tests {
             assert!(PostgresStorage::validate_execution_state(state).is_ok());
         }
         assert!(PostgresStorage::validate_execution_state("bogus").is_err());
+    }
+
+    #[test]
+    fn test_validate_backfill_state_transition_valid() {
+        // Valid transitions
+        assert!(PostgresStorage::validate_backfill_state_transition("pending", "running").is_ok());
+        assert!(
+            PostgresStorage::validate_backfill_state_transition("pending", "cancelled").is_ok()
+        );
+        assert!(
+            PostgresStorage::validate_backfill_state_transition("running", "completed").is_ok()
+        );
+        assert!(PostgresStorage::validate_backfill_state_transition("running", "failed").is_ok());
+        assert!(
+            PostgresStorage::validate_backfill_state_transition("running", "cancelled").is_ok()
+        );
+    }
+
+    #[test]
+    fn test_validate_backfill_state_transition_invalid() {
+        // Invalid transitions
+        assert!(
+            PostgresStorage::validate_backfill_state_transition("pending", "completed").is_err()
+        );
+        assert!(PostgresStorage::validate_backfill_state_transition("pending", "failed").is_err());
+        assert!(PostgresStorage::validate_backfill_state_transition("running", "pending").is_err());
+        assert!(
+            PostgresStorage::validate_backfill_state_transition("completed", "running").is_err()
+        );
+        assert!(PostgresStorage::validate_backfill_state_transition("failed", "running").is_err());
+        assert!(
+            PostgresStorage::validate_backfill_state_transition("cancelled", "running").is_err()
+        );
     }
 
     #[tokio::test]

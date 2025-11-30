@@ -1,21 +1,71 @@
 //! Backfill command for triggering partition backfills
+//!
+//! **Current Status**: This increment implements CRUD operations and CLI only.
+//! Actual partition execution is NOT yet wired - jobs will remain in "pending" state.
+//! Execution will be implemented in a subsequent increment.
 
-use anyhow::{Context, Result};
-use chrono::Utc;
+use anyhow::{bail, Context, Result};
+use chrono::{NaiveDate, Utc};
 use servo_storage::{BackfillJobModel, BackfillPartitionModel, Json, PostgresStorage, TenantId};
 use std::sync::Arc;
-use tracing::info;
+use tracing::{info, warn};
 use uuid::Uuid;
+
+/// Validates partition key format.
+/// Accepts: YYYY-MM-DD (daily), YYYY-MM-DDTHH (hourly), or custom strings.
+/// Returns normalized partition key or error.
+fn validate_partition_key(partition_key: &str) -> Result<String> {
+    let trimmed = partition_key.trim();
+
+    if trimmed.is_empty() {
+        bail!("Partition key cannot be empty");
+    }
+
+    // Reject obviously invalid inputs
+    if trimmed.len() > 64 {
+        bail!("Partition key too long (max 64 characters)");
+    }
+
+    // Try to parse as date (YYYY-MM-DD)
+    if let Ok(_date) = NaiveDate::parse_from_str(trimmed, "%Y-%m-%d") {
+        return Ok(trimmed.to_string());
+    }
+
+    // Try to parse as datetime (YYYY-MM-DDTHH)
+    if trimmed.len() == 13
+        && trimmed.chars().nth(10) == Some('T')
+        && NaiveDate::parse_from_str(&trimmed[..10], "%Y-%m-%d").is_ok()
+    {
+        if let Ok(h) = trimmed[11..13].parse::<u32>() {
+            if h < 24 {
+                return Ok(trimmed.to_string());
+            }
+        }
+    }
+
+    // Accept other formats but warn
+    warn!(
+        "Partition key '{}' is not a recognized date format (YYYY-MM-DD or YYYY-MM-DDTHH)",
+        trimmed
+    );
+    Ok(trimmed.to_string())
+}
 
 /// Execute a single partition backfill
 ///
-/// Creates a backfill job for the specified asset and partition key,
-/// then triggers execution of that partition.
+/// Creates a backfill job for the specified asset and partition key.
+///
+/// **NOTE**: This increment only creates the job record. Actual execution
+/// is not yet wired - the job will remain in "pending" state until
+/// the execution subsystem is implemented in a subsequent increment.
 pub async fn execute_single_partition(
     asset_name: &str,
     partition_key: &str,
     database_url: &str,
 ) -> Result<Uuid> {
+    // Validate partition key format
+    let partition_key = validate_partition_key(partition_key)?;
+
     info!(
         "Starting backfill for asset '{}' partition '{}'",
         asset_name, partition_key
@@ -39,25 +89,27 @@ pub async fn execute_single_partition(
 
     info!("Found asset: {} ({})", asset.name, asset.id);
 
-    // Generate idempotency key
+    // Check for existing active job on same asset/partition
+    // This prevents duplicate backfills while one is still running
+    if let Some(active_job) = storage
+        .find_active_backfill_for_partition(asset.id, &partition_key, &tenant_id)
+        .await?
+    {
+        warn!(
+            "Active backfill job {} already exists for asset '{}' partition '{}' (state: {})",
+            active_job.id, asset_name, partition_key, active_job.state
+        );
+        println!("{}", active_job.id);
+        return Ok(active_job.id);
+    }
+
+    // Generate idempotency key (unique per asset + partition + timestamp)
     let idempotency_key = format!(
         "{}:{}:{}",
         asset.id,
         partition_key,
         Utc::now().format("%Y%m%d%H%M%S")
     );
-
-    // Check for existing job with same idempotency key
-    if let Some(existing_job) = storage
-        .find_backfill_job_by_idempotency_key(&idempotency_key, &tenant_id)
-        .await?
-    {
-        info!(
-            "Found existing backfill job {} with state '{}'",
-            existing_job.id, existing_job.state
-        );
-        return Ok(existing_job.id);
-    }
 
     // Create backfill job
     let job_id = Uuid::new_v4();
@@ -111,18 +163,16 @@ pub async fn execute_single_partition(
         .await?;
     info!("Created partition record for '{}'", partition_key);
 
-    // Update job to running state
-    let mut running_job = job.clone();
-    running_job.state = "running".to_string();
-    running_job.started_at = Some(Utc::now());
-    running_job.heartbeat_at = Some(Utc::now());
-    storage
-        .update_backfill_job(&running_job, &tenant_id)
-        .await?;
+    // NOTE: Execution is not yet wired in this increment.
+    // The job remains in "pending" state until the execution subsystem
+    // picks it up (to be implemented in a subsequent increment).
+    warn!(
+        "Backfill job {} created in PENDING state. \
+         Execution is not yet implemented - job will not run automatically.",
+        job_id
+    );
 
-    info!("Backfill job {} started successfully", job_id);
     println!("{}", job_id);
-
     Ok(job_id)
 }
 
@@ -274,5 +324,72 @@ mod tests {
         assert_eq!(job.state, "pending");
         assert_eq!(job.total_partitions, 1);
         assert!(!job.include_upstream);
+    }
+
+    // Partition key validation tests
+
+    #[test]
+    fn test_validate_partition_key_daily_format() {
+        let result = validate_partition_key("2024-01-15");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "2024-01-15");
+    }
+
+    #[test]
+    fn test_validate_partition_key_hourly_format() {
+        let result = validate_partition_key("2024-01-15T14");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "2024-01-15T14");
+    }
+
+    #[test]
+    fn test_validate_partition_key_trims_whitespace() {
+        let result = validate_partition_key("  2024-01-15  ");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "2024-01-15");
+    }
+
+    #[test]
+    fn test_validate_partition_key_rejects_empty() {
+        let result = validate_partition_key("");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("cannot be empty"));
+    }
+
+    #[test]
+    fn test_validate_partition_key_rejects_whitespace_only() {
+        let result = validate_partition_key("   ");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("cannot be empty"));
+    }
+
+    #[test]
+    fn test_validate_partition_key_rejects_too_long() {
+        let long_key = "a".repeat(100);
+        let result = validate_partition_key(&long_key);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("too long"));
+    }
+
+    #[test]
+    fn test_validate_partition_key_accepts_custom_format() {
+        // Custom formats are accepted with a warning (logged but not returned)
+        let result = validate_partition_key("custom-partition-123");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "custom-partition-123");
+    }
+
+    #[test]
+    fn test_validate_partition_key_invalid_hour() {
+        // Hour 25 is invalid, should still be accepted as custom format
+        let result = validate_partition_key("2024-01-15T25");
+        assert!(result.is_ok()); // Accepted as custom format
+    }
+
+    #[test]
+    fn test_validate_partition_key_invalid_date() {
+        // Feb 30 is invalid, should still be accepted as custom format
+        let result = validate_partition_key("2024-02-30");
+        assert!(result.is_ok()); // Accepted as custom format (NaiveDate::parse fails)
     }
 }
