@@ -2507,6 +2507,264 @@ impl PostgresStorage {
         .await
     }
 
+    /// Update backfill job heartbeat timestamp
+    #[instrument(
+        skip(self, tenant_id),
+        fields(
+            db.system = "postgresql",
+            db.operation = "UPDATE",
+            db.sql.table = "backfill_jobs",
+            tenant_id = %tenant_id.as_str(),
+            job_id = %job_id
+        )
+    )]
+    pub async fn update_backfill_job_heartbeat(
+        &self,
+        job_id: Uuid,
+        tenant_id: &TenantId,
+    ) -> Result<()> {
+        let now = Utc::now();
+
+        self.with_tenant_context(tenant_id, |tx| {
+            Box::pin(async move {
+                sqlx::query(
+                    r#"
+                    UPDATE backfill_jobs
+                    SET heartbeat_at = $1
+                    WHERE id = $2 AND state = 'running'
+                    "#,
+                )
+                .bind(now)
+                .bind(job_id)
+                .execute(&mut **tx)
+                .await
+                .map_err(map_db_error)?;
+
+                Ok(())
+            })
+        })
+        .await
+    }
+
+    /// Update backfill job progress counters
+    #[instrument(
+        skip(self, tenant_id),
+        fields(
+            db.system = "postgresql",
+            db.operation = "UPDATE",
+            db.sql.table = "backfill_jobs",
+            tenant_id = %tenant_id.as_str(),
+            job_id = %job_id
+        )
+    )]
+    pub async fn update_backfill_job_progress(
+        &self,
+        job_id: Uuid,
+        completed: i32,
+        failed: i32,
+        skipped: i32,
+        tenant_id: &TenantId,
+    ) -> Result<()> {
+        let now = Utc::now();
+
+        self.with_tenant_context(tenant_id, |tx| {
+            Box::pin(async move {
+                sqlx::query(
+                    r#"
+                    UPDATE backfill_jobs
+                    SET completed_partitions = $1,
+                        failed_partitions = $2,
+                        skipped_partitions = $3,
+                        heartbeat_at = $4
+                    WHERE id = $5 AND state = 'running'
+                    "#,
+                )
+                .bind(completed)
+                .bind(failed)
+                .bind(skipped)
+                .bind(now)
+                .bind(job_id)
+                .execute(&mut **tx)
+                .await
+                .map_err(map_db_error)?;
+
+                Ok(())
+            })
+        })
+        .await
+    }
+
+    /// Transition a backfill partition to a new state
+    #[instrument(
+        skip(self, tenant_id),
+        fields(
+            db.system = "postgresql",
+            db.operation = "UPDATE",
+            db.sql.table = "backfill_partitions",
+            tenant_id = %tenant_id.as_str(),
+            partition_id = %partition_id
+        )
+    )]
+    pub async fn transition_backfill_partition_state(
+        &self,
+        partition_id: Uuid,
+        from_state: &str,
+        to_state: &str,
+        error_message: Option<&str>,
+        tenant_id: &TenantId,
+    ) -> Result<()> {
+        let to_state = to_state.to_string();
+        let from_state_owned = from_state.to_string();
+        let error_message = error_message.map(|s| s.to_string());
+        let now = Utc::now();
+
+        self.with_tenant_context(tenant_id, |tx| {
+            Box::pin(async move {
+                let started_at = if to_state == "running" {
+                    Some(now)
+                } else {
+                    None
+                };
+
+                let result = sqlx::query(
+                    r#"
+                    UPDATE backfill_partitions
+                    SET state = $1,
+                        error_message = COALESCE($2, error_message),
+                        started_at = COALESCE($3, started_at),
+                        attempt_count = attempt_count + CASE WHEN $1 = 'running' THEN 1 ELSE 0 END
+                    WHERE id = $4 AND state = $5
+                    "#,
+                )
+                .bind(&to_state)
+                .bind(&error_message)
+                .bind(started_at)
+                .bind(partition_id)
+                .bind(&from_state_owned)
+                .execute(&mut **tx)
+                .await
+                .map_err(map_db_error)?;
+
+                if result.rows_affected() == 0 {
+                    return Err(crate::Error::NotFound(format!(
+                        "Backfill partition {} not found in state '{}'",
+                        partition_id, from_state_owned
+                    )));
+                }
+
+                Ok(())
+            })
+        })
+        .await
+    }
+
+    /// Mark a backfill partition as completed
+    #[instrument(
+        skip(self, tenant_id),
+        fields(
+            db.system = "postgresql",
+            db.operation = "UPDATE",
+            db.sql.table = "backfill_partitions",
+            tenant_id = %tenant_id.as_str(),
+            partition_id = %partition_id
+        )
+    )]
+    pub async fn complete_backfill_partition(
+        &self,
+        partition_id: Uuid,
+        execution_id: Option<Uuid>,
+        duration_ms: i64,
+        tenant_id: &TenantId,
+    ) -> Result<()> {
+        let now = Utc::now();
+
+        self.with_tenant_context(tenant_id, |tx| {
+            Box::pin(async move {
+                let result = sqlx::query(
+                    r#"
+                    UPDATE backfill_partitions
+                    SET state = 'completed',
+                        execution_id = $1,
+                        duration_ms = $2,
+                        completed_at = $3
+                    WHERE id = $4 AND state = 'running'
+                    "#,
+                )
+                .bind(execution_id)
+                .bind(duration_ms)
+                .bind(now)
+                .bind(partition_id)
+                .execute(&mut **tx)
+                .await
+                .map_err(map_db_error)?;
+
+                if result.rows_affected() == 0 {
+                    return Err(crate::Error::NotFound(format!(
+                        "Backfill partition {} not found in running state",
+                        partition_id
+                    )));
+                }
+
+                Ok(())
+            })
+        })
+        .await
+    }
+
+    /// Mark a backfill partition as failed
+    #[instrument(
+        skip(self, tenant_id),
+        fields(
+            db.system = "postgresql",
+            db.operation = "UPDATE",
+            db.sql.table = "backfill_partitions",
+            tenant_id = %tenant_id.as_str(),
+            partition_id = %partition_id
+        )
+    )]
+    pub async fn fail_backfill_partition(
+        &self,
+        partition_id: Uuid,
+        error_message: &str,
+        duration_ms: i64,
+        tenant_id: &TenantId,
+    ) -> Result<()> {
+        let now = Utc::now();
+        let error_message = error_message.to_string();
+
+        self.with_tenant_context(tenant_id, |tx| {
+            Box::pin(async move {
+                let result = sqlx::query(
+                    r#"
+                    UPDATE backfill_partitions
+                    SET state = 'failed',
+                        error_message = $1,
+                        duration_ms = $2,
+                        completed_at = $3
+                    WHERE id = $4 AND state = 'running'
+                    "#,
+                )
+                .bind(&error_message)
+                .bind(duration_ms)
+                .bind(now)
+                .bind(partition_id)
+                .execute(&mut **tx)
+                .await
+                .map_err(map_db_error)?;
+
+                if result.rows_affected() == 0 {
+                    return Err(crate::Error::NotFound(format!(
+                        "Backfill partition {} not found in running state",
+                        partition_id
+                    )));
+                }
+
+                Ok(())
+            })
+        })
+        .await
+    }
+
     /// List recent check results for an asset
     #[instrument(
         skip(self, tenant_id),
