@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1764435769695,
+  "lastUpdate": 1764466618426,
   "repoUrl": "https://github.com/ethan-tyler/servo-io",
   "entries": {
     "Rust Benchmark": [
@@ -257,6 +257,282 @@ window.BENCHMARK_DATA = {
             "name": "graph_operations/add_edge",
             "value": 82,
             "range": "± 3",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "graph_operations/node_count/100",
+            "value": 0,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "graph_operations/node_count/1000",
+            "value": 0,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "graph_operations/node_count/10000",
+            "value": 0,
+            "range": "± 0",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "ethan@urbanskitech.com",
+            "name": "Ethan Urbanski",
+            "username": "ethan-tyler"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "0d2f860f7a448778212fe21859147353dcec62c7",
+          "message": "feat: Advanced data platform features (Phases 2-5) (#41)\n\n* feat(quality): add referential integrity and schema match checks (Phase 5C)\n\nImplement two deferred check types to achieve full Python SDK parity:\n\n- Add referential_integrity check for foreign key validation\n  - Supports all 3 API patterns (decorator, fluent, stacked)\n  - Validates column values exist in reference data\n\n- Add schema_match check for column validation\n  - Validates expected columns exist\n  - Supports allow_extra_columns option\n  - Auto-detects pandas/polars column types\n\n- Add SchemaColumn dataclass and type mappings\n- Add helper functions for column value/schema extraction\n- Extend CheckDefinition.to_rust_check_type() for new checks\n- Add comprehensive unit tests (18 new test cases)\n- Add integration tests for Rust schema generation\n\n* feat(partitions): add advanced partitioning support (Phase 5B)\n\nImplement Dagster-compatible partition definitions for multi-dimensional,\ntime-based, static, and dynamic partitioning.\n\nPartition Types:\n- DailyPartition, HourlyPartition, WeeklyPartition, MonthlyPartition\n- StaticPartition for fixed key lists (e.g., regions)\n- DynamicPartition for runtime-discovered keys\n- MultiPartition for multi-dimensional Cartesian products\n\nPartition Mappings:\n- IdentityMapping for 1:1 upstream/downstream mapping\n- TimeWindowMapping for time-based aggregations (e.g., daily -> weekly)\n- AllUpstreamMapping for full history dependencies\n- DimensionMapping for multi-partition dimension remapping\n\nIntegration:\n- Added partition and partition_mappings parameters to @asset decorator\n- Extended AssetDefinition with partition metadata\n- Added PartitionContext for partition-aware execution\n- Added serialization/deserialization utilities\n\nTests:\n- Comprehensive unit tests for all partition types (53 new tests)\n- Mapping resolution tests\n- Serialization round-trip tests\n\n* feat(worker): add referential_integrity and schema_match check validators\n\nAdd backend validation support for two check types from the Python SDK:\n\n- ReferentialIntegrity: validates foreign key references exist\n  - Supports in-memory validation when reference data is provided\n  - Gracefully handles server-side registration when no reference data\n  - Skips null values by default\n\n- SchemaMatch: validates expected columns are present\n  - Supports allow_extra_columns option\n  - Reports missing and unexpected columns\n\nThis ensures the Rust worker can properly validate checks registered\nvia the Python SDK's check.referential_integrity() and check.schema_match()\ndecorators.\n\nTests: 28 passing check_validator tests including new coverage for both types\n\n* docs(partitions): clarify SDK-only status for partitioning feature\n\nAdd note to module docstring explaining that partitioning is currently\navailable for asset definition and metadata purposes only. Full runtime\nand scheduler support for partition-aware execution is planned for a\nfuture release.\n\n* style: fix formatting issues in Python and Rust files\n\nApply automatic formatting:\n- cargo fmt for Rust files\n- ruff format for Python files",
+          "timestamp": "2025-11-29T20:26:19-05:00",
+          "tree_id": "3cad79824a13b71feb8d7c15617efd566ab82ddd",
+          "url": "https://github.com/ethan-tyler/servo-io/commit/0d2f860f7a448778212fe21859147353dcec62c7"
+        },
+        "date": 1764466618026,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "graph_construction/chain/10",
+            "value": 6260,
+            "range": "± 60",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "graph_construction/fan_out/10",
+            "value": 6971,
+            "range": "± 59",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "graph_construction/chain/100",
+            "value": 66824,
+            "range": "± 140",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "graph_construction/fan_out/100",
+            "value": 67715,
+            "range": "± 293",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "graph_construction/chain/1000",
+            "value": 669563,
+            "range": "± 4289",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "graph_construction/fan_out/1000",
+            "value": 669888,
+            "range": "± 1670",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "upstream_queries/chain_last_node/10",
+            "value": 44,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "upstream_queries/chain_mid_node/10",
+            "value": 44,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "upstream_queries/chain_last_node/100",
+            "value": 45,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "upstream_queries/chain_mid_node/100",
+            "value": 44,
+            "range": "± 1",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "upstream_queries/chain_last_node/500",
+            "value": 44,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "upstream_queries/chain_mid_node/500",
+            "value": 46,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "upstream_queries/single_upstream/10",
+            "value": 43,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "upstream_queries/single_upstream/100",
+            "value": 43,
+            "range": "± 1",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "upstream_queries/single_upstream/500",
+            "value": 43,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "downstream_queries/fan_out/10",
+            "value": 122,
+            "range": "± 8",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "downstream_queries/fan_out/100",
+            "value": 491,
+            "range": "± 5",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "downstream_queries/fan_out/500",
+            "value": 1838,
+            "range": "± 4",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "downstream_queries/chain_first/10",
+            "value": 45,
+            "range": "± 1",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "downstream_queries/chain_first/100",
+            "value": 44,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "downstream_queries/chain_first/500",
+            "value": 45,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "cycle_detection/chain_no_cycle/10",
+            "value": 145,
+            "range": "± 10",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "cycle_detection/chain_no_cycle/100",
+            "value": 1248,
+            "range": "± 34",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "cycle_detection/chain_no_cycle/500",
+            "value": 6527,
+            "range": "± 438",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "cycle_detection/chain_no_cycle/1000",
+            "value": 13584,
+            "range": "± 358",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "cycle_detection/diamond_layers/3",
+            "value": 451,
+            "range": "± 5",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "cycle_detection/diamond_layers/5",
+            "value": 1019,
+            "range": "± 38",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "cycle_detection/diamond_layers/7",
+            "value": 1627,
+            "range": "± 21",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "impact_analysis/fan_out_source/10",
+            "value": 131,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "impact_analysis/fan_out_source/100",
+            "value": 483,
+            "range": "± 10",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "impact_analysis/fan_out_source/500",
+            "value": 1826,
+            "range": "± 34",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "impact_analysis/chain_first/10",
+            "value": 54,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "impact_analysis/chain_first/100",
+            "value": 53,
+            "range": "± 1",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "impact_analysis/chain_first/500",
+            "value": 54,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "impact_analysis/diamond_source/3",
+            "value": 136,
+            "range": "± 1",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "impact_analysis/diamond_source/5",
+            "value": 129,
+            "range": "± 4",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "impact_analysis/diamond_source/7",
+            "value": 146,
+            "range": "± 5",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "graph_operations/add_single_node",
+            "value": 550,
+            "range": "± 8",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "graph_operations/add_edge",
+            "value": 83,
+            "range": "± 2",
             "unit": "ns/iter"
           },
           {
