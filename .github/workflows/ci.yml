@@ -77,9 +77,10 @@ jobs:
 
       - name: Run runtime integration tests
         # Tests validate execution orchestrator with RLS enforcement
-        # Uses unique tenant IDs per test for isolation (parallel execution)
-        run: cargo test --package servo-runtime --all-features -- --ignored
+        # Uses --test-threads=1 to avoid migration race conditions
+        run: cargo test --package servo-runtime --all-features -- --ignored --test-threads=1
         env:
+          TEST_DATABASE_URL: postgresql://servo:servo@localhost:5432/servo_test
           TEST_APP_DATABASE_URL: postgresql://servo_app:servo_app@localhost:5432/servo_test
 
   security-audit:

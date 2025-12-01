@@ -2945,12 +2945,13 @@ impl PostgresStorage {
                 let checkpoint = last_completed.map(|(pk,)| pk);
 
                 // Update job to paused
+                // Use COALESCE to preserve existing checkpoint if no completed partitions found
                 sqlx::query(
                     r#"
                     UPDATE backfill_jobs
                     SET state = 'paused',
                         paused_at = $1,
-                        checkpoint_partition_key = $2,
+                        checkpoint_partition_key = COALESCE($2, checkpoint_partition_key),
                         heartbeat_at = $1,
                         version = version + 1
                     WHERE id = $3

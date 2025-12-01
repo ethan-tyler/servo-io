@@ -392,8 +392,9 @@ async fn test_resume_picks_up_from_checkpoint() {
         );
 
         // Now complete it (requires 'running' state)
+        // Pass None for execution_id since we don't have an actual execution
         storage
-            .complete_backfill_partition(claimed_partition.id, Some(Uuid::new_v4()), 1000, &tenant)
+            .complete_backfill_partition(claimed_partition.id, None, 1000, &tenant)
             .await
             .expect("Failed to complete partition");
     }
