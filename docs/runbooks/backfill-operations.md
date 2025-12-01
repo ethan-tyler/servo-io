@@ -377,6 +377,96 @@ histogram_quantile(0.5, servo_backfill_eta_distribution_seconds_bucket) > 3600
 2. **15 minutes**: Backend Lead
 3. **30 minutes**: Platform Lead
 
+## Upstream Propagation
+
+### Upstream Propagation Overview
+
+When `include_upstream=true`, the system creates child backfill jobs for all upstream dependencies.
+The parent job enters `waiting_upstream` state until all child jobs complete.
+
+### Job Hierarchy
+
+```text
+Root Job (waiting_upstream)
+├── Upstream Job 1 (depth=2, execution_order=0) - furthest upstream
+├── Upstream Job 2 (depth=2, execution_order=0)
+├── Upstream Job 3 (depth=1, execution_order=1)
+└── Upstream Job 4 (depth=1, execution_order=1)
+```
+
+### Upstream Common Scenarios
+
+#### Parent Job Stuck in waiting_upstream
+
+**Check child job status:**
+
+```sql
+SELECT id, asset_name, state, execution_order,
+       completed_partitions || '/' || total_partitions as progress
+FROM backfill_jobs
+WHERE parent_job_id = '<root_job_id>'
+ORDER BY execution_order;
+```
+
+**Check for failed upstream jobs:**
+
+```sql
+SELECT id, asset_name, error_message
+FROM backfill_jobs
+WHERE parent_job_id = '<root_job_id>'
+  AND state = 'failed';
+```
+
+**Resolution:**
+
+- If upstream failed: Fix underlying issue, create new backfill with same assets
+- If upstream stuck: Use standard job stuck troubleshooting
+
+#### Cancel Entire Job Tree
+
+```bash
+# Via CLI (cancels parent and all children)
+servo backfill cancel <root_job_id> --reason "cancelling job tree"
+```
+
+Or via SQL:
+
+```sql
+-- Cancel all jobs in tree
+UPDATE backfill_jobs
+SET state = 'cancelled',
+    error_message = 'Job tree cancelled',
+    completed_at = NOW()
+WHERE id = '<root_job_id>' OR parent_job_id = '<root_job_id>'
+  AND state IN ('pending', 'waiting_upstream', 'running', 'paused', 'resuming');
+```
+
+#### Check Upstream Completion Progress
+
+```sql
+SELECT
+    id,
+    asset_name,
+    upstream_job_count,
+    completed_upstream_jobs,
+    CASE WHEN upstream_job_count > 0
+         THEN (completed_upstream_jobs * 100 / upstream_job_count)
+         ELSE 0 END as upstream_progress_pct,
+    state
+FROM backfill_jobs
+WHERE id = '<root_job_id>';
+```
+
+### Upstream Metrics
+
+```promql
+# Jobs waiting for upstream completion
+servo_backfill_jobs_active{state="waiting_upstream"}
+
+# Upstream job depth distribution
+servo_backfill_upstream_depth{depth="1|2|3|4+"}
+```
+
 ## Prevention
 
 - Monitor `servo_backfill_jobs_active` dashboard
@@ -384,6 +474,7 @@ histogram_quantile(0.5, servo_backfill_eta_distribution_seconds_bucket) > 3600
 - Review partition failure patterns before starting large backfills
 - Test pause/resume on small jobs before production use
 - Implement job concurrency limits per asset type
+- For upstream propagation: start with `max_upstream_depth=1` before using deeper values
 
 ## Related Runbooks
 

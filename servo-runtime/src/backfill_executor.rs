@@ -15,17 +15,33 @@
 //! - The job transitions to 'resuming' state
 //! - The executor claims it and transitions to 'running'
 //! - Execution continues from where it left off
+//!
+//! ## Upstream Propagation Support
+//!
+//! When a job is created with `include_upstream=true`, the executor will:
+//! 1. Discover all upstream assets within `max_upstream_depth` levels
+//! 2. Create child backfill jobs for each upstream asset in topological order
+//! 3. Transition the parent job to 'waiting_upstream' state
+//! 4. Wait for all upstream jobs to complete before processing the parent
+//!
+//! Child jobs are processed based on their `execution_order` (0 = furthest upstream).
+//! When a child job completes, it increments the parent's completion counter.
+//! When all children are complete, the parent transitions back to 'pending'.
 
 use crate::eta::EtaCalculator;
 use crate::metrics::{
-    BACKFILL_ETA_DISTRIBUTION, BACKFILL_JOBS_ACTIVE, BACKFILL_JOB_CANCELLATION_TOTAL,
-    BACKFILL_JOB_CLAIM_TOTAL, BACKFILL_JOB_ETA_SECONDS, BACKFILL_JOB_PROGRESS_RATIO,
-    BACKFILL_PARTITION_CLAIM_TOTAL, BACKFILL_PARTITION_COMPLETION_TOTAL, BACKFILL_PARTITION_DURATION,
+    BACKFILL_ETA_DISTRIBUTION, BACKFILL_JOBS_ACTIVE, BACKFILL_JOBS_ACTIVE_BY_TENANT,
+    BACKFILL_JOBS_COMPLETED_TOTAL, BACKFILL_JOB_CANCELLATION_TOTAL, BACKFILL_JOB_CLAIM_LATENCY_SECONDS,
+    BACKFILL_JOB_CLAIM_TOTAL, BACKFILL_JOB_DURATION_SECONDS, BACKFILL_JOB_ETA_SECONDS,
+    BACKFILL_JOB_PROGRESS_RATIO, BACKFILL_PARTITIONS_PROCESSED_TOTAL, BACKFILL_PARTITION_CLAIM_TOTAL,
+    BACKFILL_PARTITION_COMPLETION_TOTAL, BACKFILL_PARTITION_DURATION, BACKFILL_UPSTREAM_DEPTH,
+    BACKFILL_UPSTREAM_DISCOVERY_TOTAL, BACKFILL_UPSTREAM_JOBS_CREATED_TOTAL,
+    BACKFILL_UPSTREAM_PARENT_TRANSITION_TOTAL,
 };
 use crate::orchestrator::ExecutionOrchestrator;
 use crate::Result;
 use chrono::Utc;
-use servo_storage::{BackfillJobModel, BackfillPartitionModel, BackfillProgressUpdate, PostgresStorage, TenantId};
+use servo_storage::{BackfillJobModel, BackfillPartitionModel, BackfillProgressUpdate, CreateUpstreamChildJobParams, PostgresStorage, TenantId};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::interval;
@@ -141,15 +157,32 @@ impl BackfillExecutor {
                         .with_label_values(&[claim_type, "success"])
                         .inc();
 
+                    // Record claim latency (time from creation to claim)
+                    let claim_latency_secs =
+                        (Utc::now() - job.created_at).num_milliseconds() as f64 / 1000.0;
+                    BACKFILL_JOB_CLAIM_LATENCY_SECONDS
+                        .with_label_values(&[])
+                        .observe(claim_latency_secs);
+
                     // Track active running jobs (low-cardinality metric)
                     BACKFILL_JOBS_ACTIVE.with_label_values(&["running"]).inc();
+
+                    // Track active jobs by tenant (for per-tenant visibility)
+                    BACKFILL_JOBS_ACTIVE_BY_TENANT
+                        .with_label_values(&[&job.tenant_id, "running"])
+                        .inc();
 
                     info!(
                         job_id = %job.id,
                         asset = %job.asset_name,
                         claim_type = claim_type,
+                        claim_latency_secs = claim_latency_secs,
                         "Claimed backfill job"
                     );
+
+                    // Store tenant_id for metrics after processing
+                    let tenant_id = job.tenant_id.clone();
+
                     match self.process_job(job).await {
                         Ok(_) => processed += 1,
                         Err(e) => {
@@ -159,6 +192,9 @@ impl BackfillExecutor {
 
                     // Decrement running jobs counter when done (regardless of success/failure)
                     BACKFILL_JOBS_ACTIVE.with_label_values(&["running"]).dec();
+                    BACKFILL_JOBS_ACTIVE_BY_TENANT
+                        .with_label_values(&[&tenant_id, "running"])
+                        .dec();
                 }
                 None => {
                     // No more jobs to claim
@@ -177,6 +213,12 @@ impl BackfillExecutor {
     #[instrument(skip(self), fields(job_id = %job.id, asset = %job.asset_name))]
     async fn process_job(&self, job: BackfillJobModel) -> Result<()> {
         info!("Processing backfill job {} for asset {}", job.id, job.asset_name);
+
+        // Handle upstream propagation for root jobs with include_upstream=true
+        if job.include_upstream && job.parent_job_id.is_none() && job.upstream_job_count == 0 {
+            // This is a root job that needs to discover and create upstream jobs
+            return self.handle_upstream_propagation(&job).await;
+        }
 
         let mut completed_count = job.completed_partitions;
         let mut failed_count = job.failed_partitions;
@@ -203,9 +245,20 @@ impl BackfillExecutor {
                 BACKFILL_JOB_CANCELLATION_TOTAL
                     .with_label_values(&["detected_during_processing"])
                     .inc();
+
+                // Record job completion metrics for cancelled job
+                let job_duration_secs = (Utc::now() - job.created_at).num_seconds() as f64;
+                BACKFILL_JOB_DURATION_SECONDS
+                    .with_label_values(&["cancelled"])
+                    .observe(job_duration_secs);
+                BACKFILL_JOBS_COMPLETED_TOTAL
+                    .with_label_values(&[&job.tenant_id, "cancelled"])
+                    .inc();
+
                 info!(
                     job_id = %job.id,
                     completed = completed_count,
+                    duration_secs = job_duration_secs,
                     "Job cancelled, stopping partition processing"
                 );
                 // Job is already in cancelled state, just return
@@ -271,6 +324,11 @@ impl BackfillExecutor {
                                 .with_label_values(&["completed"])
                                 .inc();
 
+                            // Track partition throughput by tenant
+                            BACKFILL_PARTITIONS_PROCESSED_TOTAL
+                                .with_label_values(&[&job.tenant_id, "completed"])
+                                .inc();
+
                             // Update ETA calculator
                             eta_calculator.update(duration_ms);
 
@@ -301,6 +359,12 @@ impl BackfillExecutor {
                                 BACKFILL_PARTITION_COMPLETION_TOTAL
                                     .with_label_values(&["failed"])
                                     .inc();
+
+                                // Track partition throughput by tenant (failed)
+                                BACKFILL_PARTITIONS_PROCESSED_TOTAL
+                                    .with_label_values(&[&job.tenant_id, "failed"])
+                                    .inc();
+
                                 failed_count += 1;
                                 warn!(
                                     partition_key = %partition.partition_key,
@@ -401,14 +465,280 @@ impl BackfillExecutor {
             .await
             .map_err(|e| crate::Error::Internal(e.to_string()))?;
 
+        // Record job completion metrics
+        let job_duration_secs = (Utc::now() - job.created_at).num_seconds() as f64;
+        BACKFILL_JOB_DURATION_SECONDS
+            .with_label_values(&[final_state])
+            .observe(job_duration_secs);
+        BACKFILL_JOBS_COMPLETED_TOTAL
+            .with_label_values(&[&job.tenant_id, final_state])
+            .inc();
+
         info!(
             job_id = %job.id,
             completed = completed_count,
             failed = failed_count,
             skipped = skipped_count,
             final_state = final_state,
+            duration_secs = job_duration_secs,
             "Backfill job finished"
         );
+
+        // Handle parent job transitions for child jobs
+        if let Some(parent_id) = job.parent_job_id {
+            self.handle_child_job_completion(&job, parent_id, final_state).await?;
+        }
+
+        Ok(())
+    }
+
+    /// Handle upstream propagation for a root job with include_upstream=true
+    #[instrument(skip(self), fields(job_id = %job.id, asset = %job.asset_name, max_depth = job.max_upstream_depth))]
+    async fn handle_upstream_propagation(&self, job: &BackfillJobModel) -> Result<()> {
+        info!(
+            job_id = %job.id,
+            "Discovering upstream assets for propagation (max_depth={})",
+            job.max_upstream_depth
+        );
+
+        // Discover upstream assets
+        let upstream_result = self
+            .storage
+            .discover_upstream_assets(job.asset_id, job.max_upstream_depth, &self.tenant_id)
+            .await;
+
+        let upstream_assets = match upstream_result {
+            Ok(assets) => {
+                BACKFILL_UPSTREAM_DISCOVERY_TOTAL
+                    .with_label_values(&["success"])
+                    .inc();
+                assets
+            }
+            Err(e) => {
+                // Check if it's a cycle detection error
+                let status = if e.to_string().contains("Cycle detected") {
+                    "cycle_detected"
+                } else {
+                    "failed"
+                };
+                BACKFILL_UPSTREAM_DISCOVERY_TOTAL
+                    .with_label_values(&[status])
+                    .inc();
+
+                error!(job_id = %job.id, error = %e, "Failed to discover upstream assets");
+
+                // Fail the job with the error
+                self.storage
+                    .transition_backfill_job_state(
+                        job.id,
+                        "running",
+                        "failed",
+                        Some(&format!("Upstream discovery failed: {}", e)),
+                        &self.tenant_id,
+                    )
+                    .await
+                    .map_err(|e| crate::Error::Internal(e.to_string()))?;
+
+                return Ok(());
+            }
+        };
+
+        if upstream_assets.is_empty() {
+            info!(job_id = %job.id, "No upstream assets found, processing job directly");
+            // No upstream dependencies - proceed with normal processing
+            // Update state back to pending so we can claim it in the next cycle
+            // (The job was already transitioned to running when claimed)
+            return Ok(());
+        }
+
+        info!(
+            job_id = %job.id,
+            upstream_count = upstream_assets.len(),
+            "Found {} upstream assets, creating child jobs",
+            upstream_assets.len()
+        );
+
+        // Track depth distribution for metrics
+        let max_depth = upstream_assets.iter().map(|(_, _, depth)| *depth).max().unwrap_or(0);
+        let depth_label = if max_depth >= 4 { "4+" } else { &max_depth.to_string() };
+        BACKFILL_UPSTREAM_DEPTH
+            .with_label_values(&[depth_label])
+            .inc();
+
+        // Create child backfill jobs for each upstream asset
+        let child_jobs_created = self.create_upstream_child_jobs(job, &upstream_assets).await?;
+
+        // Update metrics
+        BACKFILL_UPSTREAM_JOBS_CREATED_TOTAL
+            .with_label_values(&[])
+            .inc_by(child_jobs_created as u64);
+
+        // Update parent job with upstream job count
+        self.storage
+            .update_backfill_upstream_count(job.id, child_jobs_created as i32, &self.tenant_id)
+            .await
+            .map_err(|e| crate::Error::Internal(e.to_string()))?;
+
+        // Transition to waiting_upstream state
+        self.storage
+            .transition_backfill_job_state(
+                job.id,
+                "running",
+                "waiting_upstream",
+                None,
+                &self.tenant_id,
+            )
+            .await
+            .map_err(|e| crate::Error::Internal(e.to_string()))?;
+
+        // Update active jobs gauge
+        BACKFILL_JOBS_ACTIVE.with_label_values(&["waiting_upstream"]).inc();
+
+        info!(
+            job_id = %job.id,
+            child_jobs = child_jobs_created,
+            "Parent job transitioned to waiting_upstream"
+        );
+
+        Ok(())
+    }
+
+    /// Create child backfill jobs for upstream assets
+    async fn create_upstream_child_jobs(
+        &self,
+        parent_job: &BackfillJobModel,
+        upstream_assets: &[(Uuid, String, i32)],
+    ) -> Result<usize> {
+        let mut created_count = 0;
+        let max_depth = upstream_assets.iter().map(|(_, _, d)| *d).max().unwrap_or(0);
+
+        for (asset_id, asset_name, depth) in upstream_assets {
+            // Calculate execution order: furthest upstream (highest depth) executes first (lowest order)
+            // This ensures topological ordering: depth 3 -> order 0, depth 2 -> order 1, etc.
+            let execution_order = max_depth - depth;
+
+            // Create the params struct
+            let params = CreateUpstreamChildJobParams {
+                parent_job_id: parent_job.id,
+                asset_id: *asset_id,
+                asset_name: asset_name.clone(),
+                idempotency_key: format!(
+                    "upstream:{}:{}:{}",
+                    parent_job.idempotency_key, asset_id, depth
+                ),
+                partition_start: parent_job.partition_start.clone(),
+                partition_end: parent_job.partition_end.clone(),
+                execution_order,
+            };
+
+            // Create the child job
+            let child_job_result = self
+                .storage
+                .create_upstream_child_job(params, &self.tenant_id)
+                .await;
+
+            match child_job_result {
+                Ok(child_job_id) => {
+                    debug!(
+                        parent_job_id = %parent_job.id,
+                        child_job_id = %child_job_id,
+                        asset = %asset_name,
+                        depth = depth,
+                        execution_order = execution_order,
+                        "Created upstream child job"
+                    );
+                    created_count += 1;
+                }
+                Err(e) => {
+                    // Check if it's a duplicate (idempotency key collision)
+                    if e.to_string().contains("duplicate") || e.to_string().contains("unique") {
+                        debug!(
+                            parent_job_id = %parent_job.id,
+                            asset = %asset_name,
+                            "Child job already exists (idempotent)"
+                        );
+                        created_count += 1; // Count as created since it exists
+                    } else {
+                        warn!(
+                            parent_job_id = %parent_job.id,
+                            asset = %asset_name,
+                            error = %e,
+                            "Failed to create upstream child job"
+                        );
+                        // Continue with other children
+                    }
+                }
+            }
+        }
+
+        Ok(created_count)
+    }
+
+    /// Handle completion of a child job (update parent's completion counter)
+    async fn handle_child_job_completion(
+        &self,
+        child_job: &BackfillJobModel,
+        parent_id: Uuid,
+        final_state: &str,
+    ) -> Result<()> {
+        match final_state {
+            "completed" => {
+                // Increment parent's completed_upstream_jobs counter
+                self.storage
+                    .increment_completed_upstream(parent_id, &self.tenant_id)
+                    .await
+                    .map_err(|e| crate::Error::Internal(e.to_string()))?;
+
+                // Check if all upstream jobs are complete and transition parent to pending
+                let transitioned = self
+                    .storage
+                    .try_transition_parent_to_pending(parent_id, &self.tenant_id)
+                    .await
+                    .map_err(|e| crate::Error::Internal(e.to_string()))?;
+
+                if transitioned {
+                    BACKFILL_UPSTREAM_PARENT_TRANSITION_TOTAL
+                        .with_label_values(&["waiting_to_pending"])
+                        .inc();
+                    BACKFILL_JOBS_ACTIVE.with_label_values(&["waiting_upstream"]).dec();
+
+                    info!(
+                        parent_job_id = %parent_id,
+                        child_job_id = %child_job.id,
+                        "All upstream jobs complete, parent transitioned to pending"
+                    );
+                }
+            }
+            "failed" => {
+                // Fail the parent job since an upstream failed
+                let parent_failed = self
+                    .storage
+                    .fail_parent_on_child_failure(
+                        parent_id,
+                        child_job.id,
+                        &child_job.asset_name,
+                        &self.tenant_id,
+                    )
+                    .await
+                    .map_err(|e| crate::Error::Internal(e.to_string()))?;
+
+                if parent_failed {
+                    BACKFILL_UPSTREAM_PARENT_TRANSITION_TOTAL
+                        .with_label_values(&["waiting_to_failed"])
+                        .inc();
+                    BACKFILL_JOBS_ACTIVE.with_label_values(&["waiting_upstream"]).dec();
+
+                    info!(
+                        parent_job_id = %parent_id,
+                        child_job_id = %child_job.id,
+                        "Parent job failed due to upstream failure"
+                    );
+                }
+            }
+            _ => {
+                // Cancelled or other states - parent handles its own cancellation
+            }
+        }
 
         Ok(())
     }
@@ -633,17 +963,21 @@ mod tests {
         // Define valid state transitions for backfill jobs
         let valid_transitions = vec![
             ("pending", "running"),
+            ("running", "waiting_upstream"),
             ("running", "paused"),
             ("running", "completed"),
             ("running", "failed"),
             ("running", "cancelled"),
+            ("waiting_upstream", "pending"),
+            ("waiting_upstream", "failed"),
+            ("waiting_upstream", "cancelled"),
             ("paused", "resuming"),
             ("paused", "cancelled"),
             ("resuming", "running"),
         ];
 
         // All valid states
-        let all_states = ["pending", "running", "paused", "resuming", "completed", "failed", "cancelled"];
+        let all_states = ["pending", "running", "waiting_upstream", "paused", "resuming", "completed", "failed", "cancelled"];
         let terminal_states = ["completed", "failed", "cancelled"];
 
         for (from, to) in &valid_transitions {

@@ -14,7 +14,7 @@ pub mod tenant;
 pub use circuit_breaker::CircuitBreakerConfig;
 pub use models::{
     AssetCheckModel, AssetModel, BackfillJobModel, BackfillPartitionModel, BackfillProgressUpdate,
-    CheckResultModel, ExecutionModel, WorkflowModel,
+    CheckResultModel, CreateUpstreamChildJobParams, ExecutionModel, WorkflowModel,
 };
 pub use postgres::PostgresStorage;
 pub use sqlx::types::Json;

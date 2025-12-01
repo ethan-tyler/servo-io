@@ -129,6 +129,13 @@ async fn create_test_backfill_job(
         checkpoint_partition_key: None,
         estimated_completion_at: None,
         avg_partition_duration_ms: None,
+        parent_job_id: None,
+        max_upstream_depth: 0,
+        upstream_job_count: 0,
+        completed_upstream_jobs: 0,
+        execution_order: 0,
+        sla_deadline_at: None,
+        priority: 0,
     };
 
     storage

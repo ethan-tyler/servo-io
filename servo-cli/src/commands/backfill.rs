@@ -5,7 +5,7 @@
 //! background service for execution.
 
 use anyhow::{bail, Context, Result};
-use chrono::{Duration, NaiveDate, Utc};
+use chrono::{DateTime, Duration, NaiveDate, Utc};
 use servo_storage::{BackfillJobModel, BackfillPartitionModel, Json, PostgresStorage, TenantId};
 use std::sync::Arc;
 use tracing::{info, warn};
@@ -95,9 +95,16 @@ fn validate_partition_key(partition_key: &str) -> Result<String> {
 /// Creates a backfill job for the specified asset and partition key.
 /// The job is created in "pending" state and will be picked up by the
 /// BackfillExecutor background service for execution.
+///
+/// If `include_upstream` is true, the executor will discover and backfill
+/// upstream dependencies first before processing this asset.
 pub async fn execute_single_partition(
     asset_name: &str,
     partition_key: &str,
+    include_upstream: bool,
+    max_upstream_depth: i32,
+    sla_deadline: Option<&str>,
+    priority: i32,
     database_url: &str,
 ) -> Result<Uuid> {
     // Validate partition key format
@@ -153,6 +160,22 @@ pub async fn execute_single_partition(
         Utc::now().format("%Y%m%d%H%M%S")
     );
 
+    // Parse SLA deadline if provided
+    let sla_deadline_at: Option<DateTime<Utc>> = if let Some(deadline) = sla_deadline {
+        Some(
+            DateTime::parse_from_rfc3339(deadline)
+                .with_context(|| {
+                    format!(
+                        "Invalid SLA deadline '{}'. Expected ISO 8601 format (e.g., '2024-01-16T00:00:00Z')",
+                        deadline
+                    )
+                })?
+                .with_timezone(&Utc),
+        )
+    } else {
+        None
+    };
+
     // Create backfill job
     let job_id = Uuid::new_v4();
     let now = Utc::now();
@@ -172,7 +195,7 @@ pub async fn execute_single_partition(
         completed_partitions: 0,
         failed_partitions: 0,
         skipped_partitions: 0,
-        include_upstream: false,
+        include_upstream,
         error_message: None,
         created_by: std::env::var("USER").ok(),
         created_at: now,
@@ -184,10 +207,25 @@ pub async fn execute_single_partition(
         checkpoint_partition_key: None,
         estimated_completion_at: None,
         avg_partition_duration_ms: None,
+        parent_job_id: None,
+        max_upstream_depth,
+        upstream_job_count: 0,
+        completed_upstream_jobs: 0,
+        execution_order: 0,
+        sla_deadline_at,
+        priority,
     };
 
     storage.create_backfill_job(&job, &tenant_id).await?;
-    info!("Created backfill job: {}", job_id);
+
+    if include_upstream {
+        info!(
+            "Created backfill job: {} (with upstream propagation, max_depth={})",
+            job_id, max_upstream_depth
+        );
+    } else {
+        info!("Created backfill job: {}", job_id);
+    }
 
     // Create partition record
     let partition = BackfillPartitionModel {
@@ -223,10 +261,17 @@ pub async fn execute_single_partition(
 /// Creates a single backfill job with multiple partition records for each date
 /// in the specified range (inclusive). The job is created in "pending" state
 /// and will be picked up by the BackfillExecutor background service.
+///
+/// If `include_upstream` is true, the executor will discover and backfill
+/// upstream dependencies first before processing this asset.
 pub async fn execute_range_backfill(
     asset_name: &str,
     start_date: &str,
     end_date: &str,
+    include_upstream: bool,
+    max_upstream_depth: i32,
+    sla_deadline: Option<&str>,
+    priority: i32,
     database_url: &str,
 ) -> Result<Uuid> {
     // Generate partition keys from date range
@@ -290,6 +335,22 @@ pub async fn execute_range_backfill(
         Utc::now().format("%Y%m%d%H%M%S")
     );
 
+    // Parse SLA deadline if provided
+    let sla_deadline_at: Option<DateTime<Utc>> = if let Some(deadline) = sla_deadline {
+        Some(
+            DateTime::parse_from_rfc3339(deadline)
+                .with_context(|| {
+                    format!(
+                        "Invalid SLA deadline '{}'. Expected ISO 8601 format (e.g., '2024-01-16T00:00:00Z')",
+                        deadline
+                    )
+                })?
+                .with_timezone(&Utc),
+        )
+    } else {
+        None
+    };
+
     // Create backfill job
     let job_id = Uuid::new_v4();
     let now = Utc::now();
@@ -309,7 +370,7 @@ pub async fn execute_range_backfill(
         completed_partitions: 0,
         failed_partitions: 0,
         skipped_partitions: 0,
-        include_upstream: false,
+        include_upstream,
         error_message: None,
         created_by: std::env::var("USER").ok(),
         created_at: now,
@@ -321,10 +382,25 @@ pub async fn execute_range_backfill(
         checkpoint_partition_key: None,
         estimated_completion_at: None,
         avg_partition_duration_ms: None,
+        parent_job_id: None,
+        max_upstream_depth,
+        upstream_job_count: 0,
+        completed_upstream_jobs: 0,
+        execution_order: 0,
+        sla_deadline_at,
+        priority,
     };
 
     storage.create_backfill_job(&job, &tenant_id).await?;
-    info!("Created backfill job: {}", job_id);
+
+    if include_upstream {
+        info!(
+            "Created backfill job: {} (with upstream propagation, max_depth={})",
+            job_id, max_upstream_depth
+        );
+    } else {
+        info!("Created backfill job: {}", job_id);
+    }
 
     // Create partition records in batch
     for pk in &partition_keys {
@@ -515,6 +591,26 @@ pub async fn get_status(job_id: &str, database_url: &str) -> Result<BackfillJobM
     println!("Asset:       {}", job.asset_name);
     println!("State:       {}", job.state);
 
+    // Show upstream propagation info if enabled
+    if job.include_upstream {
+        println!(
+            "Upstream:    enabled (depth={}, {}/{} upstream jobs completed)",
+            job.max_upstream_depth, job.completed_upstream_jobs, job.upstream_job_count
+        );
+        if job.state == "waiting_upstream" {
+            println!(
+                "             Waiting for {} upstream jobs to complete",
+                job.upstream_job_count - job.completed_upstream_jobs
+            );
+        }
+    }
+
+    // Show parent job info if this is a child job
+    if let Some(parent_id) = job.parent_job_id {
+        println!("Parent Job:  {}", parent_id);
+        println!("Exec Order:  {} (lower executes first)", job.execution_order);
+    }
+
     // Calculate progress percentage
     let progress_pct = if job.total_partitions > 0 {
         (job.completed_partitions as f64 / job.total_partitions as f64) * 100.0
@@ -679,6 +775,13 @@ mod tests {
             checkpoint_partition_key: None,
             estimated_completion_at: None,
             avg_partition_duration_ms: None,
+            parent_job_id: None,
+            max_upstream_depth: 0,
+            upstream_job_count: 0,
+            completed_upstream_jobs: 0,
+            execution_order: 0,
+            sla_deadline_at: None,
+            priority: 0,
         };
 
         assert_eq!(job.state, "pending");

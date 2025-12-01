@@ -116,6 +116,27 @@ enum BackfillAction {
         /// End date for range backfill (YYYY-MM-DD format, inclusive)
         #[arg(long, requires = "start")]
         end: Option<String>,
+
+        /// Include upstream dependencies in backfill
+        /// When enabled, all upstream assets will be backfilled first
+        #[arg(long, default_value = "false")]
+        include_upstream: bool,
+
+        /// Maximum depth for upstream asset discovery
+        /// 0 = direct dependencies only, 1 = include their dependencies, etc.
+        /// Default is 1 (direct dependencies and their immediate parents)
+        #[arg(long, default_value = "1")]
+        max_upstream_depth: i32,
+
+        /// SLA deadline for the backfill job (ISO 8601 format, e.g., "2024-01-16T00:00:00Z")
+        /// When set, the job will be tracked for SLA compliance
+        #[arg(long)]
+        sla_deadline: Option<String>,
+
+        /// Job priority for scheduling (-10 to 10, higher = more urgent, default: 0)
+        /// Higher priority jobs are claimed by executors first
+        #[arg(long, default_value = "0", value_parser = clap::value_parser!(i32).range(-10..=10))]
+        priority: i32,
     },
 
     /// List backfill jobs
@@ -237,17 +258,38 @@ async fn main() -> anyhow::Result<()> {
                     partition,
                     start,
                     end,
+                    include_upstream,
+                    max_upstream_depth,
+                    sla_deadline,
+                    priority,
                 } => {
                     match (partition, start, end) {
                         (Some(p), None, None) => {
                             // Single partition mode
-                            commands::backfill::execute_single_partition(&asset, &p, &database_url)
-                                .await?;
+                            commands::backfill::execute_single_partition(
+                                &asset,
+                                &p,
+                                include_upstream,
+                                max_upstream_depth,
+                                sla_deadline.as_deref(),
+                                priority,
+                                &database_url,
+                            )
+                            .await?;
                         }
                         (None, Some(s), Some(e)) => {
                             // Range mode
-                            commands::backfill::execute_range_backfill(&asset, &s, &e, &database_url)
-                                .await?;
+                            commands::backfill::execute_range_backfill(
+                                &asset,
+                                &s,
+                                &e,
+                                include_upstream,
+                                max_upstream_depth,
+                                sla_deadline.as_deref(),
+                                priority,
+                                &database_url,
+                            )
+                            .await?;
                         }
                         _ => {
                             anyhow::bail!(
