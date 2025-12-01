@@ -86,15 +86,16 @@ async fn create_test_asset(
     Ok(asset.id)
 }
 
-/// Create a dependency between two assets
+/// Create a dependency between two assets (downstream depends on upstream)
 async fn create_dependency(
     storage: &PostgresStorage,
     upstream_id: Uuid,
     downstream_id: Uuid,
     tenant: &TenantId,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    // create_asset_dependency(upstream, downstream) means "downstream depends on upstream"
     storage
-        .create_asset_dependency(downstream_id, upstream_id, "data", tenant)
+        .create_asset_dependency(upstream_id, downstream_id, "data", tenant)
         .await?;
     Ok(())
 }
