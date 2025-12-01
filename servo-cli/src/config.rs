@@ -163,11 +163,7 @@ mod tests {
     #[test]
     fn test_load_from_toml() {
         let mut file = NamedTempFile::new().unwrap();
-        writeln!(
-            file,
-            r#"database_url = "postgresql://test@localhost/test""#
-        )
-        .unwrap();
+        writeln!(file, r#"database_url = "postgresql://test@localhost/test""#).unwrap();
 
         // Set SERVO_CONFIG to point to our temp file
         std::env::set_var("SERVO_CONFIG", file.path().to_str().unwrap());
@@ -183,11 +179,7 @@ mod tests {
     #[test]
     fn test_env_overrides_file() {
         let mut file = NamedTempFile::new().unwrap();
-        writeln!(
-            file,
-            r#"database_url = "postgresql://file@localhost/file""#
-        )
-        .unwrap();
+        writeln!(file, r#"database_url = "postgresql://file@localhost/file""#).unwrap();
 
         std::env::set_var("SERVO_CONFIG", file.path().to_str().unwrap());
         std::env::set_var("DATABASE_URL", "postgresql://env@localhost/env");

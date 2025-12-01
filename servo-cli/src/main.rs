@@ -187,7 +187,8 @@ async fn main() -> anyhow::Result<()> {
     let config = config::Config::load()?;
 
     // Resolve database URL: CLI arg > config (which already has env > file > default)
-    let resolve_db_url = |cli_url: Option<String>| cli_url.unwrap_or_else(|| config.database_url.clone());
+    let resolve_db_url =
+        |cli_url: Option<String>| cli_url.unwrap_or_else(|| config.database_url.clone());
 
     // Execute command
     match cli.command {
