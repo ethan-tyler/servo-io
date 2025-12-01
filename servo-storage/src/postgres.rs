@@ -1935,7 +1935,8 @@ impl PostgresStorage {
                            include_upstream, error_message, created_by, created_at, started_at,
                            completed_at, heartbeat_at, version, paused_at, checkpoint_partition_key,
                            estimated_completion_at, avg_partition_duration_ms, parent_job_id,
-                           max_upstream_depth, upstream_job_count, completed_upstream_jobs, execution_order
+                           max_upstream_depth, upstream_job_count, completed_upstream_jobs, execution_order,
+                           sla_deadline_at, priority
                     FROM backfill_jobs
                     WHERE id = $1
                     "#,
@@ -2045,7 +2046,8 @@ impl PostgresStorage {
                                include_upstream, error_message, created_by, created_at, started_at,
                                completed_at, heartbeat_at, version, paused_at, checkpoint_partition_key,
                                estimated_completion_at, avg_partition_duration_ms, parent_job_id,
-                               max_upstream_depth, upstream_job_count, completed_upstream_jobs, execution_order
+                               max_upstream_depth, upstream_job_count, completed_upstream_jobs, execution_order,
+                               sla_deadline_at, priority
                         FROM backfill_jobs
                         WHERE state = $1
                         ORDER BY created_at DESC
@@ -2067,7 +2069,8 @@ impl PostgresStorage {
                                include_upstream, error_message, created_by, created_at, started_at,
                                completed_at, heartbeat_at, version, paused_at, checkpoint_partition_key,
                                estimated_completion_at, avg_partition_duration_ms, parent_job_id,
-                               max_upstream_depth, upstream_job_count, completed_upstream_jobs, execution_order
+                               max_upstream_depth, upstream_job_count, completed_upstream_jobs, execution_order,
+                               sla_deadline_at, priority
                         FROM backfill_jobs
                         ORDER BY created_at DESC
                         LIMIT $1 OFFSET $2
@@ -2120,7 +2123,8 @@ impl PostgresStorage {
                            include_upstream, error_message, created_by, created_at, started_at,
                            completed_at, heartbeat_at, version, paused_at, checkpoint_partition_key,
                            estimated_completion_at, avg_partition_duration_ms, parent_job_id,
-                           max_upstream_depth, upstream_job_count, completed_upstream_jobs, execution_order
+                           max_upstream_depth, upstream_job_count, completed_upstream_jobs, execution_order,
+                           sla_deadline_at, priority
                     FROM backfill_jobs
                     WHERE (state = 'pending')
                        OR (state = 'resuming')
@@ -2129,6 +2133,7 @@ impl PostgresStorage {
                         CASE WHEN state = 'pending' THEN 0
                              WHEN state = 'resuming' THEN 1
                              ELSE 2 END,
+                        priority DESC,
                         execution_order ASC,
                         created_at ASC
                     LIMIT 1
@@ -2183,7 +2188,8 @@ impl PostgresStorage {
                                include_upstream, error_message, created_by, created_at, started_at,
                                completed_at, heartbeat_at, version, paused_at, checkpoint_partition_key,
                                estimated_completion_at, avg_partition_duration_ms, parent_job_id,
-                               max_upstream_depth, upstream_job_count, completed_upstream_jobs, execution_order
+                               max_upstream_depth, upstream_job_count, completed_upstream_jobs, execution_order,
+                               sla_deadline_at, priority
                         FROM backfill_jobs
                         WHERE id = $1
                         "#,
@@ -2557,7 +2563,8 @@ impl PostgresStorage {
                            include_upstream, error_message, created_by, created_at, started_at,
                            completed_at, heartbeat_at, version, paused_at, checkpoint_partition_key,
                            estimated_completion_at, avg_partition_duration_ms, parent_job_id,
-                           max_upstream_depth, upstream_job_count, completed_upstream_jobs, execution_order
+                           max_upstream_depth, upstream_job_count, completed_upstream_jobs, execution_order,
+                           sla_deadline_at, priority
                     FROM backfill_jobs
                     WHERE idempotency_key = $1
                     "#,
@@ -2603,7 +2610,8 @@ impl PostgresStorage {
                            include_upstream, error_message, created_by, created_at, started_at,
                            completed_at, heartbeat_at, version, paused_at, checkpoint_partition_key,
                            estimated_completion_at, avg_partition_duration_ms, parent_job_id,
-                           max_upstream_depth, upstream_job_count, completed_upstream_jobs, execution_order
+                           max_upstream_depth, upstream_job_count, completed_upstream_jobs, execution_order,
+                           sla_deadline_at, priority
                     FROM backfill_jobs
                     WHERE asset_id = $1
                       AND state IN ('pending', 'waiting_upstream', 'running', 'paused', 'resuming')
@@ -2775,7 +2783,8 @@ impl PostgresStorage {
                            include_upstream, error_message, created_by, created_at, started_at,
                            completed_at, heartbeat_at, version, paused_at, checkpoint_partition_key,
                            estimated_completion_at, avg_partition_duration_ms, parent_job_id,
-                           max_upstream_depth, upstream_job_count, completed_upstream_jobs, execution_order
+                           max_upstream_depth, upstream_job_count, completed_upstream_jobs, execution_order,
+                           sla_deadline_at, priority
                     FROM backfill_jobs
                     WHERE id = $1
                     FOR UPDATE
@@ -3558,7 +3567,8 @@ impl PostgresStorage {
                            include_upstream, error_message, created_by, created_at, started_at,
                            completed_at, heartbeat_at, version, paused_at, checkpoint_partition_key,
                            estimated_completion_at, avg_partition_duration_ms, parent_job_id,
-                           max_upstream_depth, upstream_job_count, completed_upstream_jobs, execution_order
+                           max_upstream_depth, upstream_job_count, completed_upstream_jobs, execution_order,
+                           sla_deadline_at, priority
                     FROM backfill_jobs
                     WHERE parent_job_id = $1
                     ORDER BY execution_order ASC
