@@ -1,0 +1,39 @@
+# Servo CLI Configuration Example
+#
+# Copy this file to one of these locations:
+#   - ./servo.toml (current directory - highest priority)
+#   - ~/.config/servo/config.toml (user config)
+#
+# Or set SERVO_CONFIG environment variable to an explicit path.
+#
+# SECURITY NOTE: This file may contain sensitive values (e.g., database_url
+# with credentials). Ensure it is:
+#   - NOT committed to version control (add to .gitignore)
+#   - Protected with appropriate file permissions (chmod 600)
+#   - For production, prefer environment variables or secret managers
+#
+# Configuration precedence (highest to lowest):
+#   1. CLI arguments (--database-url)
+#   2. Environment variables (DATABASE_URL, etc.)
+#   3. Config file
+#   4. Defaults
+
+# Database connection URL
+# Can also be set via DATABASE_URL environment variable
+database_url = "postgresql://servo:servo@localhost:5432/servo"
+
+# Cloud provider: "gcp", "aws", or "local"
+# Can also be set via CLOUD_PROVIDER environment variable
+# cloud_provider = "gcp"
+
+# GCP project ID (required when cloud_provider = "gcp")
+# Can also be set via PROJECT_ID environment variable
+# project_id = "my-gcp-project"
+
+# Cloud region for resources
+# Can also be set via REGION environment variable
+# region = "us-central1"
+
+# Tenant ID for multi-tenant operations
+# Can also be set via TENANT_ID environment variable
+# tenant_id = "default"

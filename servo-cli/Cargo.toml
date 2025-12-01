@@ -23,6 +23,10 @@ tokio = { workspace = true }
 # Serialization
 serde = { workspace = true }
 serde_json = { workspace = true }
+toml = "0.8"
+
+# Configuration
+dirs = "5"
 
 # UUID
 uuid = { workspace = true }
@@ -44,3 +48,4 @@ servo-storage = { path = "../servo-storage" }
 servo-cloud-gcp = { path = "../servo-cloud-gcp" }
 
 [dev-dependencies]
+tempfile = "3"
