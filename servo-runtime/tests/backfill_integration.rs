@@ -294,10 +294,16 @@ async fn test_pause_checkpoint_persisted() {
     create_test_partitions(&storage, &tenant, job.id, 10).await;
 
     // Claim and start processing
-    storage
+    let claimed = storage
         .claim_pending_backfill_job("test-executor", 120, &tenant)
         .await
         .expect("Failed to claim job");
+    assert!(claimed.is_some(), "Job should be claimed");
+    assert_eq!(
+        claimed.unwrap().state,
+        "running",
+        "Job should be running after claim"
+    );
 
     // Simulate progress: 5 partitions completed
     storage
@@ -357,20 +363,37 @@ async fn test_resume_picks_up_from_checkpoint() {
     create_test_partitions(&storage, &tenant, job.id, 10).await;
 
     // Claim and mark some partitions as completed
-    storage
+    let claimed = storage
         .claim_pending_backfill_job("test-executor", 120, &tenant)
         .await
         .expect("Failed to claim job");
+    assert!(claimed.is_some(), "Job should be claimed");
+    assert_eq!(
+        claimed.unwrap().state,
+        "running",
+        "Job should be running after claim"
+    );
 
-    // Complete first 3 partitions
-    let partitions = storage
-        .list_backfill_partitions(job.id, &tenant)
-        .await
-        .expect("Failed to list partitions");
+    // Complete first 3 partitions (must claim each partition first to transition to 'running')
+    for _ in 0..3 {
+        // Claim the next pending partition (transitions to 'running')
+        let claimed_partition = storage
+            .claim_pending_partition(job.id, 3, &tenant)
+            .await
+            .expect("Failed to claim partition");
+        assert!(
+            claimed_partition.is_some(),
+            "Should have a partition to claim"
+        );
+        let claimed_partition = claimed_partition.unwrap();
+        assert_eq!(
+            claimed_partition.state, "running",
+            "Claimed partition should be running"
+        );
 
-    for partition in partitions.iter().take(3) {
+        // Now complete it (requires 'running' state)
         storage
-            .complete_backfill_partition(partition.id, Some(Uuid::new_v4()), 1000, &tenant)
+            .complete_backfill_partition(claimed_partition.id, Some(Uuid::new_v4()), 1000, &tenant)
             .await
             .expect("Failed to complete partition");
     }
