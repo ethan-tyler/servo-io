@@ -99,19 +99,49 @@ enum Commands {
 
 #[derive(Subcommand)]
 enum BackfillAction {
-    /// Trigger a backfill for a specific partition
+    /// Trigger a backfill for a specific partition or date range
     Start {
         /// Asset name to backfill
         asset: String,
 
-        /// Partition key to backfill (e.g., "2024-01-15")
+        /// Single partition key to backfill (e.g., "2024-01-15")
+        /// Use this OR --start/--end for a range
+        #[arg(long, conflicts_with_all = ["start", "end"])]
+        partition: Option<String>,
+
+        /// Start date for range backfill (YYYY-MM-DD format)
+        #[arg(long, requires = "end")]
+        start: Option<String>,
+
+        /// End date for range backfill (YYYY-MM-DD format, inclusive)
+        #[arg(long, requires = "start")]
+        end: Option<String>,
+
+        /// Include upstream dependencies in backfill
+        /// When enabled, all upstream assets will be backfilled first
+        #[arg(long, default_value = "false")]
+        include_upstream: bool,
+
+        /// Maximum depth for upstream asset discovery
+        /// 0 = direct dependencies only, 1 = include their dependencies, etc.
+        /// Default is 1 (direct dependencies and their immediate parents)
+        #[arg(long, default_value = "1")]
+        max_upstream_depth: i32,
+
+        /// SLA deadline for the backfill job (ISO 8601 format, e.g., "2024-01-16T00:00:00Z")
+        /// When set, the job will be tracked for SLA compliance
         #[arg(long)]
-        partition: String,
+        sla_deadline: Option<String>,
+
+        /// Job priority for scheduling (-10 to 10, higher = more urgent, default: 0)
+        /// Higher priority jobs are claimed by executors first
+        #[arg(long, default_value = "0", value_parser = clap::value_parser!(i32).range(-10..=10))]
+        priority: i32,
     },
 
     /// List backfill jobs
     List {
-        /// Filter by status (pending, running, completed, failed, cancelled)
+        /// Filter by status (pending, running, paused, completed, failed, cancelled)
         #[arg(long)]
         status: Option<String>,
     },
@@ -120,6 +150,28 @@ enum BackfillAction {
     Status {
         /// Backfill job ID
         job_id: String,
+    },
+
+    /// Pause a running backfill job at the next partition boundary
+    Pause {
+        /// Backfill job ID to pause
+        job_id: String,
+    },
+
+    /// Resume a paused backfill job from where it left off
+    Resume {
+        /// Backfill job ID to resume
+        job_id: String,
+    },
+
+    /// Cancel a backfill job
+    Cancel {
+        /// Backfill job ID to cancel
+        job_id: String,
+
+        /// Reason for cancellation (optional)
+        #[arg(long)]
+        reason: Option<String>,
     },
 }
 
@@ -201,15 +253,67 @@ async fn main() -> anyhow::Result<()> {
                 .ok_or_else(|| anyhow::anyhow!("DATABASE_URL not set"))?;
 
             match action {
-                BackfillAction::Start { asset, partition } => {
-                    commands::backfill::execute_single_partition(&asset, &partition, &database_url)
-                        .await?;
+                BackfillAction::Start {
+                    asset,
+                    partition,
+                    start,
+                    end,
+                    include_upstream,
+                    max_upstream_depth,
+                    sla_deadline,
+                    priority,
+                } => {
+                    match (partition, start, end) {
+                        (Some(p), None, None) => {
+                            // Single partition mode
+                            commands::backfill::execute_single_partition(
+                                &asset,
+                                &p,
+                                include_upstream,
+                                max_upstream_depth,
+                                sla_deadline.as_deref(),
+                                priority,
+                                &database_url,
+                            )
+                            .await?;
+                        }
+                        (None, Some(s), Some(e)) => {
+                            // Range mode
+                            commands::backfill::execute_range_backfill(
+                                &asset,
+                                &s,
+                                &e,
+                                include_upstream,
+                                max_upstream_depth,
+                                sla_deadline.as_deref(),
+                                priority,
+                                &database_url,
+                            )
+                            .await?;
+                        }
+                        _ => {
+                            anyhow::bail!(
+                                "Must specify either --partition for single partition \
+                                 or --start and --end for date range backfill"
+                            );
+                        }
+                    }
                 }
                 BackfillAction::List { status } => {
                     commands::backfill::list_jobs(status.as_deref(), &database_url).await?;
                 }
                 BackfillAction::Status { job_id } => {
                     commands::backfill::get_status(&job_id, &database_url).await?;
+                }
+                BackfillAction::Pause { job_id } => {
+                    commands::backfill::pause_job(&job_id, &database_url).await?;
+                }
+                BackfillAction::Resume { job_id } => {
+                    commands::backfill::resume_job(&job_id, &database_url).await?;
+                }
+                BackfillAction::Cancel { job_id, reason } => {
+                    commands::backfill::cancel_job(&job_id, reason.as_deref(), &database_url)
+                        .await?;
                 }
             }
         }

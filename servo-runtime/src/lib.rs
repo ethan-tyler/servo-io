@@ -3,8 +3,10 @@
 //! Execution runtime for Servo workflows, providing state management,
 //! retry logic, and concurrency control.
 
+pub mod backfill_executor;
 pub mod concurrency;
 pub mod converters;
+pub mod eta;
 pub mod executor;
 pub mod metrics;
 pub mod orchestrator;
@@ -13,6 +15,8 @@ pub mod state_machine;
 pub mod task_enqueuer;
 
 // Re-export commonly used types
+pub use backfill_executor::{BackfillExecutor, BackfillExecutorConfig};
+pub use eta::{format_duration_human, EtaCalculator};
 pub use executor::{ExecutionResult, Executor};
 pub use orchestrator::ExecutionOrchestrator;
 pub use retry::{RetryPolicy, RetryStrategy};
