@@ -1054,7 +1054,7 @@ mod tests {
         // - No new partitions are picked up after the current one
 
         // Simulate partition keys for a job
-        let partitions = vec![
+        let partitions = [
             "2024-01-01",
             "2024-01-02",
             "2024-01-03",
@@ -1063,9 +1063,9 @@ mod tests {
         ];
 
         // Simulate processing up to partition 3 when pause is requested
-        let completed_before_pause = vec!["2024-01-01", "2024-01-02"];
+        let completed_before_pause = ["2024-01-01", "2024-01-02"];
         let in_flight_when_pause = "2024-01-03"; // This will complete
-        let not_started = vec!["2024-01-04", "2024-01-05"]; // These won't be picked up
+        let not_started = ["2024-01-04", "2024-01-05"]; // These won't be picked up
 
         // Expected checkpoint after pause
         let expected_checkpoint = in_flight_when_pause; // Last completed partition

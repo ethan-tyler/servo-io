@@ -267,7 +267,7 @@ mod tests {
         // 10 partitions * ~1000ms = ~10s
         let eta_secs = remaining.unwrap().num_seconds();
         assert!(
-            eta_secs >= 8 && eta_secs <= 12,
+            (8..=12).contains(&eta_secs),
             "ETA should be ~10s, got {}s",
             eta_secs
         );

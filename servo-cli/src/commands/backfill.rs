@@ -268,6 +268,7 @@ pub async fn execute_single_partition(
 ///
 /// If `include_upstream` is true, the executor will discover and backfill
 /// upstream dependencies first before processing this asset.
+#[allow(clippy::too_many_arguments)]
 pub async fn execute_range_backfill(
     asset_name: &str,
     start_date: &str,
