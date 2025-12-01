@@ -28,7 +28,9 @@
 //! ```
 
 use chrono::{Duration, Utc};
-use servo_storage::{AssetModel, BackfillJobModel, BackfillPartitionModel, PostgresStorage, TenantId};
+use servo_storage::{
+    AssetModel, BackfillJobModel, BackfillPartitionModel, PostgresStorage, TenantId,
+};
 use sqlx::types::Json;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -216,10 +218,7 @@ async fn test_pause_running_job_success() {
         .await
         .expect("Failed to get job");
     assert_eq!(paused_job.state, "paused", "Job should be in paused state");
-    assert!(
-        paused_job.paused_at.is_some(),
-        "paused_at should be set"
-    );
+    assert!(paused_job.paused_at.is_some(), "paused_at should be set");
 }
 
 /// Test 2: Resume a paused job successfully
@@ -589,10 +588,7 @@ async fn test_pause_non_running_job_fails() {
 
     // Try to pause pending job - should fail
     let result = storage.pause_backfill_job(job.id, &tenant).await;
-    assert!(
-        result.is_err(),
-        "Pause should fail on non-running job"
-    );
+    assert!(result.is_err(), "Pause should fail on non-running job");
 
     // Job should still be pending
     let job_after = storage
@@ -621,10 +617,7 @@ async fn test_resume_non_paused_job_fails() {
 
     // Try to resume running job - should fail
     let result = storage.resume_backfill_job(job.id, &tenant).await;
-    assert!(
-        result.is_err(),
-        "Resume should fail on non-paused job"
-    );
+    assert!(result.is_err(), "Resume should fail on non-paused job");
 
     // Job should still be running
     let job_after = storage
@@ -657,7 +650,9 @@ async fn test_cancel_paused_job() {
         .expect("Failed to pause job");
 
     // Cancel the paused job
-    let result = storage.cancel_backfill_job(job.id, Some("test cancellation"), &tenant).await;
+    let result = storage
+        .cancel_backfill_job(job.id, Some("test cancellation"), &tenant)
+        .await;
     assert!(result.is_ok(), "Cancel should succeed on paused job");
 
     // Verify job is cancelled

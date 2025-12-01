@@ -14,8 +14,12 @@ use uuid::Uuid;
 /// Generates a list of partition keys for a date range (inclusive).
 /// Each partition key is in YYYY-MM-DD format.
 fn generate_date_range_partitions(start: &str, end: &str) -> Result<Vec<String>> {
-    let start_date = NaiveDate::parse_from_str(start, "%Y-%m-%d")
-        .with_context(|| format!("Invalid start date '{}'. Expected YYYY-MM-DD format.", start))?;
+    let start_date = NaiveDate::parse_from_str(start, "%Y-%m-%d").with_context(|| {
+        format!(
+            "Invalid start date '{}'. Expected YYYY-MM-DD format.",
+            start
+        )
+    })?;
 
     let end_date = NaiveDate::parse_from_str(end, "%Y-%m-%d")
         .with_context(|| format!("Invalid end date '{}'. Expected YYYY-MM-DD format.", end))?;
@@ -503,9 +507,7 @@ pub async fn pause_job(job_id: &str, database_url: &str) -> Result<()> {
     let storage = PostgresStorage::new(database_url).await?;
 
     // Pause the job - the storage layer handles finding the checkpoint
-    storage
-        .pause_backfill_job(job_uuid, &tenant_id)
-        .await?;
+    storage.pause_backfill_job(job_uuid, &tenant_id).await?;
 
     info!("Backfill job {} paused", job_id);
 
@@ -608,7 +610,10 @@ pub async fn get_status(job_id: &str, database_url: &str) -> Result<BackfillJobM
     // Show parent job info if this is a child job
     if let Some(parent_id) = job.parent_job_id {
         println!("Parent Job:  {}", parent_id);
-        println!("Exec Order:  {} (lower executes first)", job.execution_order);
+        println!(
+            "Exec Order:  {} (lower executes first)",
+            job.execution_order
+        );
     }
 
     // Calculate progress percentage
@@ -618,8 +623,10 @@ pub async fn get_status(job_id: &str, database_url: &str) -> Result<BackfillJobM
         0.0
     };
 
-    let remaining =
-        job.total_partitions - job.completed_partitions - job.failed_partitions - job.skipped_partitions;
+    let remaining = job.total_partitions
+        - job.completed_partitions
+        - job.failed_partitions
+        - job.skipped_partitions;
 
     println!(
         "Progress:    {}/{} ({:.1}%) - {} remaining, {} failed, {} skipped",

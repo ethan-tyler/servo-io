@@ -396,14 +396,16 @@ mod tests {
         let _ = BACKFILL_UPSTREAM_WAIT_DURATION.with_label_values(&[]);
         let _ = BACKFILL_UPSTREAM_DEPTH.with_label_values(&["1"]);
         let _ = BACKFILL_UPSTREAM_DISCOVERY_TOTAL.with_label_values(&["success"]);
-        let _ = BACKFILL_UPSTREAM_PARENT_TRANSITION_TOTAL.with_label_values(&["waiting_to_pending"]);
+        let _ =
+            BACKFILL_UPSTREAM_PARENT_TRANSITION_TOTAL.with_label_values(&["waiting_to_pending"]);
 
         // Deprecated high-cardinality metrics (kept for backward compatibility)
         let _ = BACKFILL_JOB_ETA_SECONDS.with_label_values(&["test-job-id", "test-asset"]);
         let _ = BACKFILL_JOB_PROGRESS_RATIO.with_label_values(&["test-job-id", "test-asset"]);
 
         // Throughput metrics
-        let _ = BACKFILL_PARTITIONS_PROCESSED_TOTAL.with_label_values(&["test-tenant", "completed"]);
+        let _ =
+            BACKFILL_PARTITIONS_PROCESSED_TOTAL.with_label_values(&["test-tenant", "completed"]);
         let _ = BACKFILL_JOBS_COMPLETED_TOTAL.with_label_values(&["test-tenant", "completed"]);
         let _ = BACKFILL_JOB_DURATION_SECONDS.with_label_values(&["completed"]);
         let _ = BACKFILL_JOB_CLAIM_LATENCY_SECONDS.with_label_values(&[]);

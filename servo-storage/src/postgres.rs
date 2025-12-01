@@ -1813,7 +1813,8 @@ impl PostgresStorage {
     /// Validate backfill job state
     fn validate_backfill_state(state: &str) -> Result<()> {
         match state {
-            "pending" | "waiting_upstream" | "running" | "paused" | "resuming" | "completed" | "failed" | "cancelled" => Ok(()),
+            "pending" | "waiting_upstream" | "running" | "paused" | "resuming" | "completed"
+            | "failed" | "cancelled" => Ok(()),
             _ => Err(crate::Error::ValidationError(format!(
                 "Invalid backfill state: {}",
                 state
@@ -2846,13 +2847,12 @@ impl PostgresStorage {
     ) -> Result<bool> {
         self.with_tenant_context(tenant_id, |tx| {
             Box::pin(async move {
-                let state: Option<(String,)> = sqlx::query_as(
-                    r#"SELECT state FROM backfill_jobs WHERE id = $1"#,
-                )
-                .bind(job_id)
-                .fetch_optional(&mut **tx)
-                .await
-                .map_err(map_db_error)?;
+                let state: Option<(String,)> =
+                    sqlx::query_as(r#"SELECT state FROM backfill_jobs WHERE id = $1"#)
+                        .bind(job_id)
+                        .fetch_optional(&mut **tx)
+                        .await
+                        .map_err(map_db_error)?;
 
                 Ok(state.map(|(s,)| s == "cancelled").unwrap_or(false))
             })
@@ -2863,20 +2863,15 @@ impl PostgresStorage {
     /// Check if a backfill job has been paused
     ///
     /// Useful for executors to check before processing each partition
-    pub async fn is_backfill_job_paused(
-        &self,
-        job_id: Uuid,
-        tenant_id: &TenantId,
-    ) -> Result<bool> {
+    pub async fn is_backfill_job_paused(&self, job_id: Uuid, tenant_id: &TenantId) -> Result<bool> {
         self.with_tenant_context(tenant_id, |tx| {
             Box::pin(async move {
-                let state: Option<(String,)> = sqlx::query_as(
-                    r#"SELECT state FROM backfill_jobs WHERE id = $1"#,
-                )
-                .bind(job_id)
-                .fetch_optional(&mut **tx)
-                .await
-                .map_err(map_db_error)?;
+                let state: Option<(String,)> =
+                    sqlx::query_as(r#"SELECT state FROM backfill_jobs WHERE id = $1"#)
+                        .bind(job_id)
+                        .fetch_optional(&mut **tx)
+                        .await
+                        .map_err(map_db_error)?;
 
                 Ok(state.map(|(s,)| s == "paused").unwrap_or(false))
             })
@@ -2899,27 +2894,22 @@ impl PostgresStorage {
             job_id = %job_id
         )
     )]
-    pub async fn pause_backfill_job(
-        &self,
-        job_id: Uuid,
-        tenant_id: &TenantId,
-    ) -> Result<()> {
+    pub async fn pause_backfill_job(&self, job_id: Uuid, tenant_id: &TenantId) -> Result<()> {
         let now = Utc::now();
 
         self.with_tenant_context(tenant_id, |tx| {
             Box::pin(async move {
                 // Get current job state
-                let state: Option<(String,)> = sqlx::query_as(
-                    r#"SELECT state FROM backfill_jobs WHERE id = $1 FOR UPDATE"#,
-                )
-                .bind(job_id)
-                .fetch_optional(&mut **tx)
-                .await
-                .map_err(map_db_error)?;
+                let state: Option<(String,)> =
+                    sqlx::query_as(r#"SELECT state FROM backfill_jobs WHERE id = $1 FOR UPDATE"#)
+                        .bind(job_id)
+                        .fetch_optional(&mut **tx)
+                        .await
+                        .map_err(map_db_error)?;
 
-                let current_state = state
-                    .map(|(s,)| s)
-                    .ok_or_else(|| crate::Error::NotFound(format!("Backfill job {} not found", job_id)))?;
+                let current_state = state.map(|(s,)| s).ok_or_else(|| {
+                    crate::Error::NotFound(format!("Backfill job {} not found", job_id))
+                })?;
 
                 if current_state != "running" {
                     return Err(crate::Error::ValidationError(format!(
@@ -2984,27 +2974,22 @@ impl PostgresStorage {
             job_id = %job_id
         )
     )]
-    pub async fn resume_backfill_job(
-        &self,
-        job_id: Uuid,
-        tenant_id: &TenantId,
-    ) -> Result<()> {
+    pub async fn resume_backfill_job(&self, job_id: Uuid, tenant_id: &TenantId) -> Result<()> {
         let now = Utc::now();
 
         self.with_tenant_context(tenant_id, |tx| {
             Box::pin(async move {
                 // Get current job state
-                let state: Option<(String,)> = sqlx::query_as(
-                    r#"SELECT state FROM backfill_jobs WHERE id = $1 FOR UPDATE"#,
-                )
-                .bind(job_id)
-                .fetch_optional(&mut **tx)
-                .await
-                .map_err(map_db_error)?;
+                let state: Option<(String,)> =
+                    sqlx::query_as(r#"SELECT state FROM backfill_jobs WHERE id = $1 FOR UPDATE"#)
+                        .bind(job_id)
+                        .fetch_optional(&mut **tx)
+                        .await
+                        .map_err(map_db_error)?;
 
-                let current_state = state
-                    .map(|(s,)| s)
-                    .ok_or_else(|| crate::Error::NotFound(format!("Backfill job {} not found", job_id)))?;
+                let current_state = state.map(|(s,)| s).ok_or_else(|| {
+                    crate::Error::NotFound(format!("Backfill job {} not found", job_id))
+                })?;
 
                 if current_state != "paused" {
                     return Err(crate::Error::ValidationError(format!(
@@ -3428,14 +3413,17 @@ impl PostgresStorage {
                 break;
             }
 
-            let name = asset_names.get(&current_asset_id)
+            let name = asset_names
+                .get(&current_asset_id)
                 .cloned()
                 .unwrap_or_else(|| format!("asset-{}", current_asset_id));
             upstream_assets.push((current_asset_id, name, depth));
 
             // Continue BFS if within depth limit
             if max_depth < 0 || depth < max_depth {
-                let deps = self.get_upstream_dependencies(current_asset_id, tenant_id).await?;
+                let deps = self
+                    .get_upstream_dependencies(current_asset_id, tenant_id)
+                    .await?;
                 for dep in deps {
                     // Note: if dep.upstream_asset_id is already in visited, it means
                     // we've seen this asset before - either the target or another upstream.
@@ -4249,10 +4237,11 @@ mod tests {
                 .is_ok()
         );
         // waiting_upstream -> cancelled: User cancellation
-        assert!(
-            PostgresStorage::validate_backfill_state_transition("waiting_upstream", "cancelled")
-                .is_ok()
-        );
+        assert!(PostgresStorage::validate_backfill_state_transition(
+            "waiting_upstream",
+            "cancelled"
+        )
+        .is_ok());
 
         // Invalid transitions involving waiting_upstream
         // Cannot go from waiting_upstream directly to running (must go through pending first)
@@ -4261,23 +4250,26 @@ mod tests {
                 .is_err()
         );
         // Cannot complete from waiting_upstream (must complete from running)
-        assert!(
-            PostgresStorage::validate_backfill_state_transition("waiting_upstream", "completed")
-                .is_err()
-        );
+        assert!(PostgresStorage::validate_backfill_state_transition(
+            "waiting_upstream",
+            "completed"
+        )
+        .is_err());
         // Cannot go back to waiting_upstream from terminal states
-        assert!(
-            PostgresStorage::validate_backfill_state_transition("completed", "waiting_upstream")
-                .is_err()
-        );
+        assert!(PostgresStorage::validate_backfill_state_transition(
+            "completed",
+            "waiting_upstream"
+        )
+        .is_err());
         assert!(
             PostgresStorage::validate_backfill_state_transition("failed", "waiting_upstream")
                 .is_err()
         );
-        assert!(
-            PostgresStorage::validate_backfill_state_transition("cancelled", "waiting_upstream")
-                .is_err()
-        );
+        assert!(PostgresStorage::validate_backfill_state_transition(
+            "cancelled",
+            "waiting_upstream"
+        )
+        .is_err());
     }
 
     #[test]

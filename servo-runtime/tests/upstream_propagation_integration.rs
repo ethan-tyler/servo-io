@@ -23,8 +23,9 @@ fn get_test_database_url() -> String {
 
 /// Get test application database URL (non-owner, RLS enforced)
 fn get_test_app_database_url() -> String {
-    std::env::var("TEST_APP_DATABASE_URL")
-        .unwrap_or_else(|_| "postgresql://servo_app:servo_app@localhost:5432/servo_test".to_string())
+    std::env::var("TEST_APP_DATABASE_URL").unwrap_or_else(|_| {
+        "postgresql://servo_app:servo_app@localhost:5432/servo_test".to_string()
+    })
 }
 
 /// Setup test database with migrations
@@ -244,7 +245,10 @@ async fn test_discover_upstream_assets_depth_limit() {
     let has_b = upstream.iter().any(|(id, _, _)| *id == asset_b);
     let has_c = upstream.iter().any(|(id, _, _)| *id == asset_c);
 
-    assert!(!has_a, "Asset A should NOT be in results (beyond depth limit)");
+    assert!(
+        !has_a,
+        "Asset A should NOT be in results (beyond depth limit)"
+    );
     assert!(has_b, "Asset B should be in results");
     assert!(has_c, "Asset C should be in results");
 }
@@ -519,7 +523,10 @@ async fn test_cancel_job_tree() {
     assert_eq!(cancelled_count, 3);
 
     // Verify all jobs are cancelled
-    let parent = storage.get_backfill_job(parent_job.id, &tenant).await.unwrap();
+    let parent = storage
+        .get_backfill_job(parent_job.id, &tenant)
+        .await
+        .unwrap();
     let child1 = storage.get_backfill_job(child1_id, &tenant).await.unwrap();
     let child2 = storage.get_backfill_job(child2_id, &tenant).await.unwrap();
 
@@ -581,7 +588,10 @@ async fn test_fail_parent_on_child_failure() {
     assert!(parent_failed);
 
     // Verify parent is failed
-    let parent = storage.get_backfill_job(parent_job.id, &tenant).await.unwrap();
+    let parent = storage
+        .get_backfill_job(parent_job.id, &tenant)
+        .await
+        .unwrap();
     assert_eq!(parent.state, "failed");
     assert!(parent.error_message.is_some());
     assert!(parent.error_message.unwrap().contains("upstream"));
@@ -605,9 +615,10 @@ async fn test_get_child_backfill_jobs() {
 
     // Create three child jobs with different execution orders
     for i in 0..3 {
-        let upstream = create_test_asset(&storage, &unique_name(&format!("upstream{}", i)), &tenant)
-            .await
-            .unwrap();
+        let upstream =
+            create_test_asset(&storage, &unique_name(&format!("upstream{}", i)), &tenant)
+                .await
+                .unwrap();
         let params = CreateUpstreamChildJobParams {
             parent_job_id: parent_job.id,
             asset_id: upstream,

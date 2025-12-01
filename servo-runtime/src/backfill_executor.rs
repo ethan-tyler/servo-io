@@ -31,17 +31,20 @@
 use crate::eta::EtaCalculator;
 use crate::metrics::{
     BACKFILL_ETA_DISTRIBUTION, BACKFILL_JOBS_ACTIVE, BACKFILL_JOBS_ACTIVE_BY_TENANT,
-    BACKFILL_JOBS_COMPLETED_TOTAL, BACKFILL_JOB_CANCELLATION_TOTAL, BACKFILL_JOB_CLAIM_LATENCY_SECONDS,
-    BACKFILL_JOB_CLAIM_TOTAL, BACKFILL_JOB_DURATION_SECONDS, BACKFILL_JOB_ETA_SECONDS,
-    BACKFILL_JOB_PROGRESS_RATIO, BACKFILL_PARTITIONS_PROCESSED_TOTAL, BACKFILL_PARTITION_CLAIM_TOTAL,
-    BACKFILL_PARTITION_COMPLETION_TOTAL, BACKFILL_PARTITION_DURATION, BACKFILL_UPSTREAM_DEPTH,
-    BACKFILL_UPSTREAM_DISCOVERY_TOTAL, BACKFILL_UPSTREAM_JOBS_CREATED_TOTAL,
-    BACKFILL_UPSTREAM_PARENT_TRANSITION_TOTAL,
+    BACKFILL_JOBS_COMPLETED_TOTAL, BACKFILL_JOB_CANCELLATION_TOTAL,
+    BACKFILL_JOB_CLAIM_LATENCY_SECONDS, BACKFILL_JOB_CLAIM_TOTAL, BACKFILL_JOB_DURATION_SECONDS,
+    BACKFILL_JOB_ETA_SECONDS, BACKFILL_JOB_PROGRESS_RATIO, BACKFILL_PARTITIONS_PROCESSED_TOTAL,
+    BACKFILL_PARTITION_CLAIM_TOTAL, BACKFILL_PARTITION_COMPLETION_TOTAL,
+    BACKFILL_PARTITION_DURATION, BACKFILL_UPSTREAM_DEPTH, BACKFILL_UPSTREAM_DISCOVERY_TOTAL,
+    BACKFILL_UPSTREAM_JOBS_CREATED_TOTAL, BACKFILL_UPSTREAM_PARENT_TRANSITION_TOTAL,
 };
 use crate::orchestrator::ExecutionOrchestrator;
 use crate::Result;
 use chrono::Utc;
-use servo_storage::{BackfillJobModel, BackfillPartitionModel, BackfillProgressUpdate, CreateUpstreamChildJobParams, PostgresStorage, TenantId};
+use servo_storage::{
+    BackfillJobModel, BackfillPartitionModel, BackfillProgressUpdate, CreateUpstreamChildJobParams,
+    PostgresStorage, TenantId,
+};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::interval;
@@ -141,7 +144,11 @@ impl BackfillExecutor {
             // Atomically claim a job
             let claimed_job = self
                 .storage
-                .claim_pending_backfill_job(&self.executor_id, stale_threshold_secs, &self.tenant_id)
+                .claim_pending_backfill_job(
+                    &self.executor_id,
+                    stale_threshold_secs,
+                    &self.tenant_id,
+                )
                 .await
                 .map_err(|e| crate::Error::Internal(e.to_string()))?;
 
@@ -212,7 +219,10 @@ impl BackfillExecutor {
     /// Process a single backfill job (already claimed and in running state)
     #[instrument(skip(self), fields(job_id = %job.id, asset = %job.asset_name))]
     async fn process_job(&self, job: BackfillJobModel) -> Result<()> {
-        info!("Processing backfill job {} for asset {}", job.id, job.asset_name);
+        info!(
+            "Processing backfill job {} for asset {}",
+            job.id, job.asset_name
+        );
 
         // Handle upstream propagation for root jobs with include_upstream=true
         if job.include_upstream && job.parent_job_id.is_none() && job.upstream_job_count == 0 {
@@ -336,7 +346,10 @@ impl BackfillExecutor {
                             last_completed_partition = Some(partition.partition_key.clone());
 
                             // Calculate remaining partitions and ETA
-                            let remaining = job.total_partitions - completed_count - failed_count - skipped_count;
+                            let remaining = job.total_partitions
+                                - completed_count
+                                - failed_count
+                                - skipped_count;
                             let eta = eta_calculator.estimate_completion_time(remaining as u32);
 
                             info!(
@@ -385,8 +398,10 @@ impl BackfillExecutor {
                     }
 
                     // Update job progress with ETA (idempotent - always set absolute values)
-                    let remaining = job.total_partitions - completed_count - failed_count - skipped_count;
-                    let estimated_completion = eta_calculator.estimate_completion_time(remaining as u32);
+                    let remaining =
+                        job.total_partitions - completed_count - failed_count - skipped_count;
+                    let estimated_completion =
+                        eta_calculator.estimate_completion_time(remaining as u32);
 
                     // Emit progress metrics
                     let progress_ratio = if job.total_partitions > 0 {
@@ -486,7 +501,8 @@ impl BackfillExecutor {
 
         // Handle parent job transitions for child jobs
         if let Some(parent_id) = job.parent_job_id {
-            self.handle_child_job_completion(&job, parent_id, final_state).await?;
+            self.handle_child_job_completion(&job, parent_id, final_state)
+                .await?;
         }
 
         Ok(())
@@ -559,14 +575,24 @@ impl BackfillExecutor {
         );
 
         // Track depth distribution for metrics
-        let max_depth = upstream_assets.iter().map(|(_, _, depth)| *depth).max().unwrap_or(0);
-        let depth_label = if max_depth >= 4 { "4+" } else { &max_depth.to_string() };
+        let max_depth = upstream_assets
+            .iter()
+            .map(|(_, _, depth)| *depth)
+            .max()
+            .unwrap_or(0);
+        let depth_label = if max_depth >= 4 {
+            "4+"
+        } else {
+            &max_depth.to_string()
+        };
         BACKFILL_UPSTREAM_DEPTH
             .with_label_values(&[depth_label])
             .inc();
 
         // Create child backfill jobs for each upstream asset
-        let child_jobs_created = self.create_upstream_child_jobs(job, &upstream_assets).await?;
+        let child_jobs_created = self
+            .create_upstream_child_jobs(job, &upstream_assets)
+            .await?;
 
         // Update metrics
         BACKFILL_UPSTREAM_JOBS_CREATED_TOTAL
@@ -592,7 +618,9 @@ impl BackfillExecutor {
             .map_err(|e| crate::Error::Internal(e.to_string()))?;
 
         // Update active jobs gauge
-        BACKFILL_JOBS_ACTIVE.with_label_values(&["waiting_upstream"]).inc();
+        BACKFILL_JOBS_ACTIVE
+            .with_label_values(&["waiting_upstream"])
+            .inc();
 
         info!(
             job_id = %job.id,
@@ -610,7 +638,11 @@ impl BackfillExecutor {
         upstream_assets: &[(Uuid, String, i32)],
     ) -> Result<usize> {
         let mut created_count = 0;
-        let max_depth = upstream_assets.iter().map(|(_, _, d)| *d).max().unwrap_or(0);
+        let max_depth = upstream_assets
+            .iter()
+            .map(|(_, _, d)| *d)
+            .max()
+            .unwrap_or(0);
 
         for (asset_id, asset_name, depth) in upstream_assets {
             // Calculate execution order: furthest upstream (highest depth) executes first (lowest order)
@@ -700,7 +732,9 @@ impl BackfillExecutor {
                     BACKFILL_UPSTREAM_PARENT_TRANSITION_TOTAL
                         .with_label_values(&["waiting_to_pending"])
                         .inc();
-                    BACKFILL_JOBS_ACTIVE.with_label_values(&["waiting_upstream"]).dec();
+                    BACKFILL_JOBS_ACTIVE
+                        .with_label_values(&["waiting_upstream"])
+                        .dec();
 
                     info!(
                         parent_job_id = %parent_id,
@@ -726,7 +760,9 @@ impl BackfillExecutor {
                     BACKFILL_UPSTREAM_PARENT_TRANSITION_TOTAL
                         .with_label_values(&["waiting_to_failed"])
                         .inc();
-                    BACKFILL_JOBS_ACTIVE.with_label_values(&["waiting_upstream"]).dec();
+                    BACKFILL_JOBS_ACTIVE
+                        .with_label_values(&["waiting_upstream"])
+                        .dec();
 
                     info!(
                         parent_job_id = %parent_id,
@@ -753,7 +789,10 @@ impl BackfillExecutor {
         let start = std::time::Instant::now();
 
         // Execute the asset for this partition with idempotency key
-        let idempotency_key = format!("backfill:{}:{}:{}", job.id, partition.partition_key, partition.attempt_count);
+        let idempotency_key = format!(
+            "backfill:{}:{}:{}",
+            job.id, partition.partition_key, partition.attempt_count
+        );
         let execution_result = self
             .execute_asset_partition(job.asset_id, &partition.partition_key, &idempotency_key)
             .await;
@@ -832,7 +871,11 @@ impl BackfillExecutor {
         // Start execution with idempotency key to prevent duplicates on retry
         let execution_id = self
             .orchestrator
-            .start_execution(workflow.id, &self.tenant_id, Some(idempotency_key.to_string()))
+            .start_execution(
+                workflow.id,
+                &self.tenant_id,
+                Some(idempotency_key.to_string()),
+            )
             .await
             .map_err(|e| crate::Error::Execution(e.to_string()))?;
 
@@ -905,12 +948,8 @@ pub async fn run_backfill_executor(
     tenant_id: TenantId,
     config: Option<BackfillExecutorConfig>,
 ) -> Result<()> {
-    let executor = BackfillExecutor::new(
-        storage,
-        orchestrator,
-        config.unwrap_or_default(),
-        tenant_id,
-    );
+    let executor =
+        BackfillExecutor::new(storage, orchestrator, config.unwrap_or_default(), tenant_id);
     executor.run().await
 }
 
@@ -977,7 +1016,16 @@ mod tests {
         ];
 
         // All valid states
-        let all_states = ["pending", "running", "waiting_upstream", "paused", "resuming", "completed", "failed", "cancelled"];
+        let all_states = [
+            "pending",
+            "running",
+            "waiting_upstream",
+            "paused",
+            "resuming",
+            "completed",
+            "failed",
+            "cancelled",
+        ];
         let terminal_states = ["completed", "failed", "cancelled"];
 
         for (from, to) in &valid_transitions {
@@ -989,7 +1037,11 @@ mod tests {
         // Verify terminal states have no outgoing transitions
         for terminal in terminal_states {
             for (from, _) in &valid_transitions {
-                assert_ne!(*from, terminal, "Terminal state {} should not have outgoing transitions", terminal);
+                assert_ne!(
+                    *from, terminal,
+                    "Terminal state {} should not have outgoing transitions",
+                    terminal
+                );
             }
         }
     }
@@ -1002,7 +1054,13 @@ mod tests {
         // - No new partitions are picked up after the current one
 
         // Simulate partition keys for a job
-        let partitions = vec!["2024-01-01", "2024-01-02", "2024-01-03", "2024-01-04", "2024-01-05"];
+        let partitions = vec![
+            "2024-01-01",
+            "2024-01-02",
+            "2024-01-03",
+            "2024-01-04",
+            "2024-01-05",
+        ];
 
         // Simulate processing up to partition 3 when pause is requested
         let completed_before_pause = vec!["2024-01-01", "2024-01-02"];
@@ -1023,7 +1081,11 @@ mod tests {
         assert_eq!(not_started.len(), 2); // These should remain pending after pause
 
         // When resumed, processing should start after the checkpoint
-        let resume_index = partitions.iter().position(|p| *p == expected_checkpoint).unwrap() + 1;
+        let resume_index = partitions
+            .iter()
+            .position(|p| *p == expected_checkpoint)
+            .unwrap()
+            + 1;
         assert_eq!(partitions[resume_index], "2024-01-04"); // First partition after checkpoint
     }
 }

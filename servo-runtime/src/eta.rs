@@ -64,7 +64,8 @@ impl EtaCalculator {
             self.avg_duration_ms = duration;
         } else {
             // EWMA formula: new_avg = alpha * current + (1 - alpha) * old_avg
-            self.avg_duration_ms = self.alpha * duration + (1.0 - self.alpha) * self.avg_duration_ms;
+            self.avg_duration_ms =
+                self.alpha * duration + (1.0 - self.alpha) * self.avg_duration_ms;
         }
 
         self.observation_count += 1;
@@ -265,7 +266,11 @@ mod tests {
         assert!(remaining.is_some());
         // 10 partitions * ~1000ms = ~10s
         let eta_secs = remaining.unwrap().num_seconds();
-        assert!(eta_secs >= 8 && eta_secs <= 12, "ETA should be ~10s, got {}s", eta_secs);
+        assert!(
+            eta_secs >= 8 && eta_secs <= 12,
+            "ETA should be ~10s, got {}s",
+            eta_secs
+        );
     }
 
     #[test]
@@ -273,17 +278,21 @@ mod tests {
         let mut calc = EtaCalculator::new(0.3);
 
         // Simulate partitions with increasing duration (e.g., larger data later)
-        calc.update(500);   // Fast partitions early
+        calc.update(500); // Fast partitions early
         calc.update(600);
         calc.update(800);
         calc.update(1000);
-        calc.update(1200);  // Slower partitions later
+        calc.update(1200); // Slower partitions later
 
         // EWMA should weight recent (slower) partitions more heavily
         let avg = calc.avg_duration_ms();
         // With alpha=0.3, the average should be closer to recent values
         // than a simple mean would suggest
-        assert!(avg > 700, "EWMA should be pulled toward recent values, got {}", avg);
+        assert!(
+            avg > 700,
+            "EWMA should be pulled toward recent values, got {}",
+            avg
+        );
     }
 
     #[test]
