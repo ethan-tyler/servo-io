@@ -59,9 +59,10 @@ jobs:
         run: cargo build --verbose
 
       - name: Run tests
-        # servo-worker tests require --test-threads=1 due to env var manipulation in config tests
+        # servo-worker and servo-cli tests require --test-threads=1 due to env var manipulation in config tests
         run: |
-          cargo test --verbose --all-features --workspace --exclude servo-worker
+          cargo test --verbose --all-features --workspace --exclude servo-worker --exclude servo-cli
+          cargo test --verbose --all-features -p servo-cli -- --test-threads=1
           cargo test --verbose --all-features -p servo-worker -- --test-threads=1
         env:
           DATABASE_URL: postgresql://servo:servo@localhost:5432/servo_test

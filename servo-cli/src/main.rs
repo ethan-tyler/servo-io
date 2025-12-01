@@ -13,8 +13,8 @@ struct Cli {
     #[command(subcommand)]
     command: Commands,
 
-    /// Database URL
-    #[arg(long, env = "DATABASE_URL")]
+    /// Database URL (overrides config file and DATABASE_URL env var)
+    #[arg(long)]
     database_url: Option<String>,
 
     /// Enable verbose logging
@@ -183,15 +183,19 @@ async fn main() -> anyhow::Result<()> {
     let log_level = if cli.verbose { "debug" } else { "info" };
     tracing_subscriber::fmt().with_env_filter(log_level).init();
 
+    // Load configuration (defaults → file → env vars)
+    let config = config::Config::load()?;
+
+    // Resolve database URL: CLI arg > config (which already has env > file > default)
+    let resolve_db_url = |cli_url: Option<String>| cli_url.unwrap_or_else(|| config.database_url.clone());
+
     // Execute command
     match cli.command {
         Commands::Init { database_url } => {
             commands::init::execute(&database_url).await?;
         }
         Commands::Migrate { direction } => {
-            let database_url = cli
-                .database_url
-                .ok_or_else(|| anyhow::anyhow!("DATABASE_URL not set"))?;
+            let database_url = resolve_db_url(cli.database_url.clone());
             commands::migrate::execute(&database_url, &direction).await?;
         }
         Commands::Deploy { workflow_file } => {
@@ -204,9 +208,7 @@ async fn main() -> anyhow::Result<()> {
             timeout,
             poll_interval,
         } => {
-            let database_url = cli
-                .database_url
-                .ok_or_else(|| anyhow::anyhow!("DATABASE_URL not set"))?;
+            let database_url = resolve_db_url(cli.database_url.clone());
 
             let status = commands::run::execute(
                 &workflow_name,
@@ -234,9 +236,7 @@ async fn main() -> anyhow::Result<()> {
             execution_id,
             tenant_id,
         } => {
-            let database_url = cli
-                .database_url
-                .ok_or_else(|| anyhow::anyhow!("DATABASE_URL not set"))?;
+            let database_url = resolve_db_url(cli.database_url.clone());
 
             commands::status::execute(&execution_id, &tenant_id, &database_url).await?;
         }
@@ -248,9 +248,7 @@ async fn main() -> anyhow::Result<()> {
             commands::lineage::execute(&name, upstream, downstream).await?;
         }
         Commands::Backfill { action } => {
-            let database_url = cli
-                .database_url
-                .ok_or_else(|| anyhow::anyhow!("DATABASE_URL not set"))?;
+            let database_url = resolve_db_url(cli.database_url.clone());
 
             match action {
                 BackfillAction::Start {
