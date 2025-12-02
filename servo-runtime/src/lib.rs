@@ -17,7 +17,9 @@ pub mod state_machine;
 pub mod task_enqueuer;
 
 // Re-export commonly used types
-pub use backfill_executor::{BackfillExecutor, BackfillExecutorConfig};
+pub use backfill_executor::{
+    BackfillExecutor, BackfillExecutorConfig, JobDependencyCache, UpstreamAssetInfo,
+};
 pub use eta::{format_duration_human, EtaCalculator};
 pub use executor::{ExecutionResult, Executor};
 pub use local_executor::{LocalExecutor, LocalExecutorConfig};

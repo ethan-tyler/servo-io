@@ -9,10 +9,14 @@ from servo.context import (
     ExecutionContext,
     RuntimePartitionContext,
     clear_context_cache,
+    get_all_dimensions,
     get_context,
+    get_dimension,
     get_partition_date,
     get_partition_datetime,
     get_partition_key,
+    get_upstream_partitions,
+    is_multi_dimensional,
 )
 
 
@@ -324,3 +328,130 @@ class TestIntegration:
                 "2024-01-14",
                 "2024-01-15",
             ]
+
+
+class TestNewConvenienceFunctions:
+    """Tests for new convenience functions."""
+
+    def setup_method(self):
+        clear_context_cache()
+
+    def teardown_method(self):
+        clear_context_cache()
+
+    def test_get_dimension(self):
+        """Test get_dimension convenience function."""
+        partition_context = {
+            "partition_key": '{"date": "2024-01-15", "region": "us-west"}',
+            "partition_type": "multi",
+            "dimensions": {"date": "2024-01-15", "region": "us-west"},
+        }
+        env = {"SERVO_PARTITION_CONTEXT": json.dumps(partition_context)}
+        with mock.patch.dict(os.environ, env, clear=False):
+            assert get_dimension("date") == "2024-01-15"
+            assert get_dimension("region") == "us-west"
+            assert get_dimension("nonexistent") is None
+
+    def test_get_dimension_no_context(self):
+        """Test get_dimension returns None when no context."""
+        with mock.patch.dict(os.environ, {}, clear=True):
+            assert get_dimension("date") is None
+
+    def test_get_upstream_partitions(self):
+        """Test get_upstream_partitions convenience function."""
+        partition_context = {
+            "partition_key": "2024-01-15",
+            "upstream_partitions": {
+                "daily_source": ["2024-01-14", "2024-01-15"],
+                "hourly_source": ["2024-01-15T00:00:00", "2024-01-15T01:00:00"],
+            },
+        }
+        env = {"SERVO_PARTITION_CONTEXT": json.dumps(partition_context)}
+        with mock.patch.dict(os.environ, env, clear=False):
+            assert get_upstream_partitions("daily_source") == [
+                "2024-01-14",
+                "2024-01-15",
+            ]
+            assert get_upstream_partitions("hourly_source") == [
+                "2024-01-15T00:00:00",
+                "2024-01-15T01:00:00",
+            ]
+            assert get_upstream_partitions("nonexistent") is None
+
+    def test_get_upstream_partitions_no_context(self):
+        """Test get_upstream_partitions returns None when no context."""
+        with mock.patch.dict(os.environ, {}, clear=True):
+            assert get_upstream_partitions("any_asset") is None
+
+    def test_get_all_dimensions(self):
+        """Test get_all_dimensions convenience function."""
+        partition_context = {
+            "partition_key": '{"date": "2024-01-15", "region": "us", "product": "widgets"}',
+            "dimensions": {"date": "2024-01-15", "region": "us", "product": "widgets"},
+        }
+        env = {"SERVO_PARTITION_CONTEXT": json.dumps(partition_context)}
+        with mock.patch.dict(os.environ, env, clear=False):
+            dims = get_all_dimensions()
+            assert dims == {"date": "2024-01-15", "region": "us", "product": "widgets"}
+
+    def test_get_all_dimensions_empty(self):
+        """Test get_all_dimensions returns empty dict when no dimensions."""
+        partition_context = {
+            "partition_key": "2024-01-15",
+        }
+        env = {"SERVO_PARTITION_CONTEXT": json.dumps(partition_context)}
+        with mock.patch.dict(os.environ, env, clear=False):
+            dims = get_all_dimensions()
+            assert dims == {}
+
+    def test_get_all_dimensions_no_context(self):
+        """Test get_all_dimensions returns empty dict when no context."""
+        with mock.patch.dict(os.environ, {}, clear=True):
+            assert get_all_dimensions() == {}
+
+    def test_is_multi_dimensional_true(self):
+        """Test is_multi_dimensional returns True for multi-dimensional partitions."""
+        partition_context = {
+            "partition_key": '{"date": "2024-01-15", "region": "us"}',
+            "dimensions": {"date": "2024-01-15", "region": "us"},
+        }
+        env = {"SERVO_PARTITION_CONTEXT": json.dumps(partition_context)}
+        with mock.patch.dict(os.environ, env, clear=False):
+            assert is_multi_dimensional() is True
+
+    def test_is_multi_dimensional_false(self):
+        """Test is_multi_dimensional returns False for simple partitions."""
+        partition_context = {
+            "partition_key": "2024-01-15",
+        }
+        env = {"SERVO_PARTITION_CONTEXT": json.dumps(partition_context)}
+        with mock.patch.dict(os.environ, env, clear=False):
+            assert is_multi_dimensional() is False
+
+    def test_is_multi_dimensional_no_context(self):
+        """Test is_multi_dimensional returns False when no context."""
+        with mock.patch.dict(os.environ, {}, clear=True):
+            assert is_multi_dimensional() is False
+
+    def test_runtime_partition_context_get_all_dimensions(self):
+        """Test RuntimePartitionContext.get_all_dimensions method."""
+        ctx = RuntimePartitionContext(
+            partition_key='{"date": "2024-01-15", "region": "us"}',
+            dimensions={"date": "2024-01-15", "region": "us"},
+        )
+        dims = ctx.get_all_dimensions()
+        assert dims == {"date": "2024-01-15", "region": "us"}
+        # Verify it returns a copy, not the original
+        dims["new_key"] = "value"
+        assert "new_key" not in ctx.dimensions
+
+    def test_runtime_partition_context_is_multi_dimensional(self):
+        """Test RuntimePartitionContext.is_multi_dimensional method."""
+        multi = RuntimePartitionContext(
+            partition_key='{"date": "2024-01-15", "region": "us"}',
+            dimensions={"date": "2024-01-15", "region": "us"},
+        )
+        assert multi.is_multi_dimensional() is True
+
+        simple = RuntimePartitionContext(partition_key="2024-01-15")
+        assert simple.is_multi_dimensional() is False
