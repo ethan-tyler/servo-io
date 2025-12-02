@@ -46,13 +46,11 @@ fn can_run_python_tests() -> bool {
     }
 
     // Check fixtures directory exists
-    let fixtures_exists = std::env::current_dir()
+    std::env::current_dir()
         .ok()
         .map(|p| p.join("servo-runtime/tests/fixtures"))
         .filter(|p| p.exists() && p.is_dir())
-        .is_some();
-
-    fixtures_exists
+        .is_some()
 }
 
 /// Get the app role database URL for RLS-enforced operations
