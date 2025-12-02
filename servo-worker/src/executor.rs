@@ -160,7 +160,7 @@ impl WorkflowExecutor {
             workflow_id,
             tenant_id: tenant_id.to_string(),
             idempotency_key: None,
-            execution_plan: vec![], // Executor will compile the workflow
+            execution_plan: vec![],  // Executor will compile the workflow
             partition_context: None, // No partition context for scheduled runs
         };
 

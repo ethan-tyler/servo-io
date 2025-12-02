@@ -720,8 +720,8 @@ mod partition_context_contract {
     #[test]
     fn partition_key_with_special_characters_escapes_correctly() {
         // Test that special characters are properly escaped
-        let ctx = PartitionExecutionContext::new("2024-01-15 10:00:00")
-            .with_partition_type("hourly");
+        let ctx =
+            PartitionExecutionContext::new("2024-01-15 10:00:00").with_partition_type("hourly");
 
         let json = serde_json::to_string(&ctx).unwrap();
         let deserialized: PartitionExecutionContext = serde_json::from_str(&json).unwrap();
@@ -787,7 +787,10 @@ mod partition_context_contract {
 
         assert_eq!(deserialized.partition_key, "2024-01-15|us-west");
         assert_eq!(deserialized.partition_type.as_deref(), Some("daily"));
-        assert_eq!(deserialized.timezone.as_deref(), Some("America/Los_Angeles"));
+        assert_eq!(
+            deserialized.timezone.as_deref(),
+            Some("America/Los_Angeles")
+        );
         assert_eq!(deserialized.format.as_deref(), Some("%Y-%m-%d|%s"));
         assert_eq!(deserialized.get_dimension("date"), Some("2024-01-15"));
         assert_eq!(deserialized.get_dimension("region"), Some("us-west"));

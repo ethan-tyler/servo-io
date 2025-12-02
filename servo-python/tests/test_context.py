@@ -5,8 +5,6 @@ import os
 from datetime import date, datetime
 from unittest import mock
 
-import pytest
-
 from servo.context import (
     ExecutionContext,
     RuntimePartitionContext,

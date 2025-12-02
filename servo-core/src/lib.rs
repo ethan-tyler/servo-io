@@ -18,8 +18,8 @@ pub use asset::{
     Asset, AssetBuilder, AssetDependency, AssetId, AssetMetadata, DependencyType, PartitionConfig,
     PartitionType, TimeGranularity,
 };
-pub use partition_context::PartitionExecutionContext;
 pub use compiler::{CompileError, ExecutionPlan, WorkflowCompiler};
+pub use partition_context::PartitionExecutionContext;
 pub use partition_mapping::{
     infer_mapping, PartitionMapper, PartitionMapping, PartitionMappingError,
 };

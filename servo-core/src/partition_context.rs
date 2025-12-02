@@ -153,7 +153,10 @@ mod tests {
             .with_format("%Y-%m-%d")
             .with_dimension("date", "2024-01-15")
             .with_dimension("region", "us-west")
-            .with_upstream_partition("source_table", vec!["2024-01-14".into(), "2024-01-15".into()]);
+            .with_upstream_partition(
+                "source_table",
+                vec!["2024-01-14".into(), "2024-01-15".into()],
+            );
 
         assert_eq!(ctx.partition_key, "2024-01-15");
         assert_eq!(ctx.partition_type.as_deref(), Some("daily"));
@@ -265,7 +268,8 @@ mod tests {
         let partition_type = PartitionType::Custom {
             expression: "hash(user_id)".into(),
         };
-        let ctx = PartitionExecutionContext::from_partition_type("bucket_42".into(), &partition_type);
+        let ctx =
+            PartitionExecutionContext::from_partition_type("bucket_42".into(), &partition_type);
         assert_eq!(ctx.partition_key, "bucket_42");
         assert_eq!(ctx.partition_type.as_deref(), Some("custom"));
     }
