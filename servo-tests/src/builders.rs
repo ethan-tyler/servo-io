@@ -255,6 +255,12 @@ impl WorkflowBuilder {
             tags: Json(self.tags),
             tenant_id: self.tenant_id,
             version: self.version,
+            schedule_cron: None,
+            schedule_timezone: None,
+            schedule_enabled: None,
+            scheduler_job_name: None,
+            last_scheduled_run: None,
+            next_scheduled_run: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         }

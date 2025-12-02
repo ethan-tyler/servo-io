@@ -9,7 +9,7 @@ pub mod queries;
 // Re-export commonly used types
 pub use graph::{LineageEdge, LineageGraph, LineageNode};
 pub use impact::ImpactAnalysis;
-pub use queries::LineageQuery;
+pub use queries::{LineageInfo, LineageQuery};
 
 /// Result type for lineage operations
 pub type Result<T> = std::result::Result<T, Error>;

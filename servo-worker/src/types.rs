@@ -6,6 +6,21 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+/// Payload for scheduler-triggered workflow execution
+///
+/// This is sent by Cloud Scheduler to trigger a scheduled workflow run.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SchedulerPayload {
+    /// UUID of the workflow to execute
+    pub workflow_id: Uuid,
+
+    /// Tenant identifier for multi-tenant isolation
+    pub tenant_id: String,
+
+    /// What triggered this execution
+    pub triggered_by: String,
+}
+
 /// Task payload sent from orchestrator via Cloud Tasks
 ///
 /// This is the data contract between the orchestrator and worker.

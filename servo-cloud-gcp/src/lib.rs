@@ -11,6 +11,7 @@ pub mod health;
 pub mod metrics;
 pub mod monitoring;
 pub mod queue;
+pub mod scheduler;
 pub mod secrets;
 pub mod signing;
 pub mod trace_context;
@@ -19,6 +20,7 @@ pub mod trace_context;
 pub use config::GcpConfig;
 pub use executor::CloudRunExecutor;
 pub use queue::CloudTasksQueue;
+pub use scheduler::{CloudSchedulerManager, ScheduleConfig};
 
 /// Result type for GCP operations
 pub type Result<T> = std::result::Result<T, Error>;

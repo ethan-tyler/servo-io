@@ -41,6 +41,7 @@ use crate::metrics::{
 use crate::orchestrator::ExecutionOrchestrator;
 use crate::Result;
 use chrono::Utc;
+use servo_core::PartitionConfig;
 use servo_storage::{
     BackfillJobModel, BackfillPartitionModel, BackfillProgressUpdate, CreateUpstreamChildJobParams,
     PostgresStorage, TenantId,
@@ -91,6 +92,8 @@ pub struct BackfillExecutor {
     config: BackfillExecutorConfig,
     tenant_id: TenantId,
     executor_id: String,
+    /// Partition resolver for mapping partition ranges when creating upstream jobs
+    partition_resolver: crate::partition_resolver::PartitionResolver,
 }
 
 impl BackfillExecutor {
@@ -109,6 +112,7 @@ impl BackfillExecutor {
             config,
             tenant_id,
             executor_id,
+            partition_resolver: crate::partition_resolver::PartitionResolver::new(),
         }
     }
 
@@ -632,6 +636,10 @@ impl BackfillExecutor {
     }
 
     /// Create child backfill jobs for upstream assets
+    ///
+    /// Uses the partition resolver to map partition ranges from the parent (downstream)
+    /// to each upstream asset. Currently uses identity mapping until partition configs
+    /// are stored in the database.
     async fn create_upstream_child_jobs(
         &self,
         parent_job: &BackfillJobModel,
@@ -649,6 +657,68 @@ impl BackfillExecutor {
             // This ensures topological ordering: depth 3 -> order 0, depth 2 -> order 1, etc.
             let execution_order = max_depth - depth;
 
+            // Load partition configs from storage for partition mapping
+            let upstream_config: Option<PartitionConfig> = self
+                .storage
+                .get_asset_partition_config(*asset_id, &self.tenant_id)
+                .await
+                .ok()
+                .flatten()
+                .and_then(|json| serde_json::from_value(json).ok());
+
+            let downstream_config: Option<PartitionConfig> = self
+                .storage
+                .get_asset_partition_config(parent_job.asset_id, &self.tenant_id)
+                .await
+                .ok()
+                .flatten()
+                .and_then(|json| serde_json::from_value(json).ok());
+
+            // Resolve upstream partition range using partition mapping
+            let (partition_start, partition_end) =
+                match (&parent_job.partition_start, &parent_job.partition_end) {
+                    (Some(start), Some(end)) => {
+                        let (resolved_start, resolved_end) = self
+                            .partition_resolver
+                            .resolve_upstream_range(
+                                start,
+                                end,
+                                upstream_config.as_ref(),
+                                downstream_config.as_ref(),
+                            )
+                            .unwrap_or_else(|e| {
+                                warn!(
+                                    parent_job_id = %parent_job.id,
+                                    asset = %asset_name,
+                                    error = %e,
+                                    "Failed to resolve partition range, using parent range"
+                                );
+                                (start.clone(), end.clone())
+                            });
+
+                        debug!(
+                            parent_job_id = %parent_job.id,
+                            asset = %asset_name,
+                            parent_start = %start,
+                            parent_end = %end,
+                            resolved_start = %resolved_start,
+                            resolved_end = %resolved_end,
+                            upstream_config = ?upstream_config,
+                            downstream_config = ?downstream_config,
+                            "Resolved upstream partition range"
+                        );
+
+                        (Some(resolved_start), Some(resolved_end))
+                    }
+                    _ => {
+                        // No partition range specified - use parent's (likely None)
+                        (
+                            parent_job.partition_start.clone(),
+                            parent_job.partition_end.clone(),
+                        )
+                    }
+                };
+
             // Create the params struct
             let params = CreateUpstreamChildJobParams {
                 parent_job_id: parent_job.id,
@@ -658,8 +728,8 @@ impl BackfillExecutor {
                     "upstream:{}:{}:{}",
                     parent_job.idempotency_key, asset_id, depth
                 ),
-                partition_start: parent_job.partition_start.clone(),
-                partition_end: parent_job.partition_end.clone(),
+                partition_start,
+                partition_end,
                 execution_order,
             };
 

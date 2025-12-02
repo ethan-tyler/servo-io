@@ -22,6 +22,10 @@ pub struct Config {
     pub region: Option<String>,
     /// Tenant ID for multi-tenant operations
     pub tenant_id: Option<String>,
+    /// Cloud Run worker URL (for scheduler callbacks)
+    pub worker_url: Option<String>,
+    /// Path to GCP service account JSON file
+    pub service_account_file: Option<String>,
 }
 
 impl Default for Config {
@@ -32,6 +36,8 @@ impl Default for Config {
             project_id: None,
             region: None,
             tenant_id: None,
+            worker_url: None,
+            service_account_file: None,
         }
     }
 }
@@ -101,6 +107,8 @@ impl Config {
             project_id: other.project_id.or(self.project_id),
             region: other.region.or(self.region),
             tenant_id: other.tenant_id.or(self.tenant_id),
+            worker_url: other.worker_url.or(self.worker_url),
+            service_account_file: other.service_account_file.or(self.service_account_file),
         }
     }
 
@@ -119,6 +127,13 @@ impl Config {
         }
         if let Ok(tenant) = std::env::var("TENANT_ID") {
             self.tenant_id = Some(tenant);
+        }
+        if let Ok(url) = std::env::var("WORKER_URL") {
+            self.worker_url = Some(url);
+        }
+        // GOOGLE_APPLICATION_CREDENTIALS is the standard GCP env var
+        if let Ok(file) = std::env::var("GOOGLE_APPLICATION_CREDENTIALS") {
+            self.service_account_file = Some(file);
         }
         self
     }

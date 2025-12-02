@@ -68,3 +68,4 @@ servo-storage = { path = "../servo-storage" }
 tokio = { workspace = true, features = ["test-util", "macros"] }
 testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true }
+sqlx = { workspace = true }

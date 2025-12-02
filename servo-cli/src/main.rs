@@ -88,6 +88,10 @@ enum Commands {
         /// Show downstream dependencies
         #[arg(long)]
         downstream: bool,
+
+        /// Tenant ID
+        #[arg(long, env = "TENANT_ID")]
+        tenant_id: String,
     },
 
     /// Manage partition backfills
@@ -245,8 +249,12 @@ async fn main() -> anyhow::Result<()> {
             name,
             upstream,
             downstream,
+            tenant_id,
         } => {
-            commands::lineage::execute(&name, upstream, downstream).await?;
+            let database_url = resolve_db_url(cli.database_url.clone());
+
+            commands::lineage::execute(&name, upstream, downstream, &tenant_id, &database_url)
+                .await?;
         }
         Commands::Backfill { action } => {
             let database_url = resolve_db_url(cli.database_url.clone());

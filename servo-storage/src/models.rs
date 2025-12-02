@@ -14,6 +14,12 @@ pub struct AssetModel {
     pub asset_type: String,
     pub owner: Option<String>,
     pub tags: sqlx::types::Json<Vec<String>>,
+    /// Optional partition configuration for partition-aware backfills
+    pub partition_config: Option<sqlx::types::Json<serde_json::Value>>,
+    /// Python module containing the compute function (e.g., "myproject.workflows")
+    pub compute_fn_module: Option<String>,
+    /// Python function name to invoke for this asset (e.g., "clean_customers")
+    pub compute_fn_function: Option<String>,
     pub tenant_id: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -29,6 +35,18 @@ pub struct WorkflowModel {
     pub tags: sqlx::types::Json<Vec<String>>,
     pub tenant_id: Option<String>,
     pub version: i32,
+    /// Cron expression for scheduled execution (e.g., "0 2 * * *" for daily at 2 AM)
+    pub schedule_cron: Option<String>,
+    /// Timezone for cron schedule interpretation (e.g., "America/New_York")
+    pub schedule_timezone: Option<String>,
+    /// Whether the schedule is active
+    pub schedule_enabled: Option<bool>,
+    /// GCP Cloud Scheduler job name for this workflow
+    pub scheduler_job_name: Option<String>,
+    /// Timestamp of the last scheduled execution
+    pub last_scheduled_run: Option<DateTime<Utc>>,
+    /// Computed next execution time based on cron
+    pub next_scheduled_run: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
