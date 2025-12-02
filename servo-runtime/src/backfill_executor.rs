@@ -41,7 +41,7 @@ use crate::metrics::{
 use crate::orchestrator::ExecutionOrchestrator;
 use crate::Result;
 use chrono::Utc;
-use servo_core::PartitionConfig;
+use servo_core::{PartitionConfig, PartitionExecutionContext};
 use servo_storage::{
     BackfillJobModel, BackfillPartitionModel, BackfillProgressUpdate, CreateUpstreamChildJobParams,
     PostgresStorage, TenantId,
@@ -917,7 +917,7 @@ impl BackfillExecutor {
             "Executing asset partition"
         );
 
-        // Get the asset to find its workflow
+        // Get the asset to find its workflow and partition config
         let asset = self
             .storage
             .get_asset(asset_id, &self.tenant_id)
@@ -938,13 +938,18 @@ impl BackfillExecutor {
                 crate::Error::NotFound(format!("No workflow found for asset '{}'", asset.name))
             })?;
 
-        // Start execution with idempotency key to prevent duplicates on retry
+        // Build partition execution context from asset's partition config
+        let partition_config = asset.partition_config.as_ref().map(|j| j.0.clone());
+        let partition_context = self.build_partition_context(partition_key, &partition_config);
+
+        // Start execution with partition context to pass partition info to worker
         let execution_id = self
             .orchestrator
-            .start_execution(
+            .start_execution_with_partition(
                 workflow.id,
                 &self.tenant_id,
                 Some(idempotency_key.to_string()),
+                partition_context,
             )
             .await
             .map_err(|e| crate::Error::Execution(e.to_string()))?;
@@ -959,6 +964,43 @@ impl BackfillExecutor {
         } else {
             Err(crate::Error::Execution("Execution failed".to_string()))
         }
+    }
+
+    /// Build a partition execution context from asset's partition config
+    fn build_partition_context(
+        &self,
+        partition_key: &str,
+        partition_config: &Option<serde_json::Value>,
+    ) -> PartitionExecutionContext {
+        let mut ctx = PartitionExecutionContext::new(partition_key);
+
+        // Extract partition type and timezone from partition_config if available
+        if let Some(config) = partition_config {
+            // Try to parse partition type
+            if let Some(partition_type) = config.get("partition_type").and_then(|v| v.as_str()) {
+                ctx = ctx.with_partition_type(partition_type);
+            } else if let Some(granularity) = config
+                .get("partition_type")
+                .and_then(|v| v.get("Time"))
+                .and_then(|v| v.get("granularity"))
+                .and_then(|v| v.as_str())
+            {
+                // Handle nested Time granularity format
+                ctx = ctx.with_partition_type(granularity.to_lowercase());
+            }
+
+            // Try to parse timezone
+            if let Some(timezone) = config.get("timezone").and_then(|v| v.as_str()) {
+                ctx = ctx.with_timezone(timezone);
+            }
+
+            // Try to parse format string
+            if let Some(format) = config.get("format").and_then(|v| v.as_str()) {
+                ctx = ctx.with_format(format);
+            }
+        }
+
+        ctx
     }
 
     /// Wait for an execution to complete

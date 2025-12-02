@@ -42,6 +42,7 @@ use crate::state_machine::ExecutionState;
 use crate::task_enqueuer::TaskEnqueuer;
 use crate::Result;
 use chrono::Utc;
+use servo_core::PartitionExecutionContext;
 use servo_storage::{ExecutionModel, PostgresStorage, TenantId};
 use std::sync::Arc;
 use std::time::Instant;
@@ -247,6 +248,7 @@ impl ExecutionOrchestrator {
                     tenant_id,
                     idempotency_key.clone(),
                     execution_plan,
+                    None, // No partition context for non-backfill executions
                 )
                 .await
                 .map_err(|e| {
@@ -261,6 +263,117 @@ impl ExecutionOrchestrator {
             tracing::debug!(
                 execution_id = %execution_id,
                 "Execution task enqueued successfully"
+            );
+        }
+
+        Ok(execution_id)
+    }
+
+    /// Start a workflow execution with partition context (for backfill operations)
+    ///
+    /// Similar to `start_execution`, but includes partition context that will be
+    /// passed through to the worker and ultimately to the Python compute function.
+    ///
+    /// # Arguments
+    ///
+    /// * `workflow_id` - UUID of the workflow to execute
+    /// * `tenant_id` - Tenant context for RLS and isolation
+    /// * `idempotency_key` - Optional key for idempotent execution
+    /// * `partition_context` - Partition context with partition key and metadata
+    #[instrument(
+        skip(self, partition_context),
+        fields(
+            workflow_id = %workflow_id,
+            tenant_id = %tenant_id.as_str(),
+            idempotency_key = ?idempotency_key,
+            partition_key = %partition_context.partition_key,
+        )
+    )]
+    pub async fn start_execution_with_partition(
+        &self,
+        workflow_id: Uuid,
+        tenant_id: &TenantId,
+        idempotency_key: Option<String>,
+        partition_context: PartitionExecutionContext,
+    ) -> Result<Uuid> {
+        let start = Instant::now();
+        tracing::debug!("Starting partitioned execution");
+
+        // Create execution in database with Pending state
+        let execution = ExecutionModel {
+            id: Uuid::new_v4(),
+            workflow_id,
+            state: ExecutionState::Pending.into(),
+            tenant_id: Some(tenant_id.as_str().to_string()),
+            idempotency_key: idempotency_key.clone(),
+            started_at: None,
+            completed_at: None,
+            error_message: None,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+
+        let (execution_id, was_created) = if idempotency_key.is_some() {
+            self.storage
+                .create_execution_or_get_existing(&execution, tenant_id)
+                .await
+                .map_err(|e| Self::map_storage_error(e, "Failed to create execution"))?
+        } else {
+            self.storage
+                .create_execution(&execution, tenant_id)
+                .await
+                .map_err(|e| Self::map_storage_error(e, "Failed to create execution"))?;
+            (execution.id, true)
+        };
+
+        if !was_created {
+            tracing::info!(
+                execution_id = %execution_id,
+                workflow_id = %workflow_id,
+                partition_key = %partition_context.partition_key,
+                "Returning existing execution (idempotency hit)"
+            );
+            return Ok(execution_id);
+        }
+
+        let elapsed = start.elapsed();
+        if elapsed.as_millis() > 100 {
+            warn!(
+                execution_id = %execution_id,
+                duration_ms = elapsed.as_millis(),
+                "Slow execution creation"
+            );
+        }
+        tracing::debug!(execution_id = %execution_id, "Partitioned execution created");
+
+        // Enqueue task with partition context
+        if let Some(enqueuer) = &self.task_enqueuer {
+            tracing::debug!("Enqueueing partitioned execution task");
+
+            let execution_plan = Vec::new();
+
+            enqueuer
+                .enqueue(
+                    execution_id,
+                    workflow_id,
+                    tenant_id,
+                    idempotency_key.clone(),
+                    execution_plan,
+                    Some(partition_context),
+                )
+                .await
+                .map_err(|e| {
+                    error!(
+                        execution_id = %execution_id,
+                        error = %e,
+                        "Failed to enqueue partitioned execution task"
+                    );
+                    crate::Error::Internal(format!("Failed to enqueue task: {}", e))
+                })?;
+
+            tracing::debug!(
+                execution_id = %execution_id,
+                "Partitioned execution task enqueued successfully"
             );
         }
 

@@ -133,7 +133,14 @@ async fn test_real_cloud_tasks_enqueue() {
 
     // Enqueue task (makes real API call to Cloud Tasks)
     let task_name = queue
-        .enqueue(execution_id, workflow_id, tenant_id, None, execution_plan)
+        .enqueue(
+            execution_id,
+            workflow_id,
+            tenant_id,
+            None,
+            execution_plan,
+            None,
+        )
         .await
         .expect("Failed to enqueue task to Cloud Tasks");
 
@@ -189,7 +196,14 @@ async fn test_real_cloud_tasks_error_handling() {
 
     // Attempt to enqueue should fail with 404 or 403
     let result = queue
-        .enqueue(execution_id, workflow_id, "test-tenant", None, Vec::new())
+        .enqueue(
+            execution_id,
+            workflow_id,
+            "test-tenant",
+            None,
+            Vec::new(),
+            None,
+        )
         .await;
 
     assert!(

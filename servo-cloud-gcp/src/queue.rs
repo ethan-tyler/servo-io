@@ -7,6 +7,7 @@ use crate::trace_context::inject_trace_context;
 use crate::{Error, Result};
 use async_trait::async_trait;
 use serde::Serialize;
+use servo_core::PartitionExecutionContext;
 use servo_runtime::task_enqueuer::{EnqueueError, EnqueueResult, TaskEnqueuer};
 use servo_storage::TenantId;
 use std::collections::HashMap;
@@ -31,6 +32,9 @@ pub struct TaskPayload {
     pub tenant_id: String,
     pub idempotency_key: Option<String>,
     pub execution_plan: Vec<Uuid>,
+    /// Partition context for partitioned asset execution
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub partition_context: Option<PartitionExecutionContext>,
 }
 
 /// Cloud Tasks queue for task scheduling
@@ -106,6 +110,7 @@ impl CloudTasksQueue {
     /// * `tenant_id` - Tenant identifier
     /// * `idempotency_key` - Optional idempotency key (not enforced by Cloud Tasks, passed through to worker)
     /// * `execution_plan` - Pre-compiled execution plan (currently empty, worker compiles from workflow)
+    /// * `partition_context` - Optional partition context for partitioned asset execution
     ///
     /// # Returns
     ///
@@ -120,11 +125,12 @@ impl CloudTasksQueue {
     /// - Cloud Tasks API request fails (4xx/5xx)
     #[tracing::instrument(
         name = "cloud_tasks.enqueue",
-        skip(self, idempotency_key, execution_plan),
+        skip(self, idempotency_key, execution_plan, partition_context),
         fields(
             execution_id = %execution_id,
             workflow_id = %workflow_id,
             tenant_id = %tenant_id,
+            partition_key = tracing::field::Empty,
             task_name = tracing::field::Empty,
         )
     )]
@@ -135,9 +141,15 @@ impl CloudTasksQueue {
         tenant_id: &str,
         idempotency_key: Option<String>,
         execution_plan: Vec<Uuid>,
+        partition_context: Option<PartitionExecutionContext>,
     ) -> Result<String> {
         // Start total duration timer
         let _total_timer = ENQUEUE_DURATION.with_label_values(&["total"]).start_timer();
+
+        // Record partition key in span if present
+        if let Some(ref ctx) = partition_context {
+            tracing::Span::current().record("partition_key", ctx.partition_key.as_str());
+        }
 
         // 1. Create task payload
         let payload = TaskPayload {
@@ -146,6 +158,7 @@ impl CloudTasksQueue {
             tenant_id: tenant_id.to_string(),
             idempotency_key,
             execution_plan,
+            partition_context,
         };
 
         let payload_json = serde_json::to_string(&payload)
@@ -543,6 +556,7 @@ impl TaskEnqueuer for CloudTasksQueue {
         tenant_id: &TenantId,
         idempotency_key: Option<String>,
         execution_plan: Vec<Uuid>,
+        partition_context: Option<PartitionExecutionContext>,
     ) -> EnqueueResult<String> {
         self.enqueue(
             execution_id,
@@ -550,6 +564,7 @@ impl TaskEnqueuer for CloudTasksQueue {
             tenant_id.as_str(),
             idempotency_key,
             execution_plan,
+            partition_context,
         )
         .await
         .map_err(|e| match e {

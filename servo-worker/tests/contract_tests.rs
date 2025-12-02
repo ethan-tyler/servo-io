@@ -584,3 +584,256 @@ mod scheduler_oidc_contract {
         assert_eq!(expected_claim, "email");
     }
 }
+
+/// Integration tests for partition context propagation
+///
+/// These tests verify that partition context flows correctly through the
+/// execution pipeline: BackfillExecutor → TaskPayload → Worker → Python
+mod partition_context_contract {
+    use super::*;
+    use servo_core::PartitionExecutionContext;
+    use servo_worker::types::TaskPayload;
+
+    /// Create a task payload with partition context
+    fn create_partitioned_task_payload() -> TaskPayload {
+        TaskPayload {
+            execution_id: Uuid::new_v4(),
+            workflow_id: Uuid::new_v4(),
+            tenant_id: "test-tenant".to_string(),
+            idempotency_key: None,
+            execution_plan: vec![],
+            partition_context: Some(
+                PartitionExecutionContext::new("2024-01-15")
+                    .with_partition_type("daily")
+                    .with_timezone("UTC"),
+            ),
+        }
+    }
+
+    /// Create a task payload without partition context (for backward compat)
+    fn create_non_partitioned_task_payload() -> TaskPayload {
+        TaskPayload {
+            execution_id: Uuid::new_v4(),
+            workflow_id: Uuid::new_v4(),
+            tenant_id: "test-tenant".to_string(),
+            idempotency_key: None,
+            execution_plan: vec![],
+            partition_context: None,
+        }
+    }
+
+    // ============================================================
+    // End-to-End Partition Context Serialization Tests
+    // ============================================================
+
+    #[test]
+    fn partition_context_serializes_correctly() {
+        let payload = create_partitioned_task_payload();
+        let json = serde_json::to_string(&payload).unwrap();
+
+        // Verify partition_context is present in JSON
+        assert!(json.contains("partition_context"));
+        assert!(json.contains("2024-01-15"));
+        assert!(json.contains("daily"));
+        assert!(json.contains("UTC"));
+    }
+
+    #[test]
+    fn partition_context_deserializes_correctly() {
+        let payload = create_partitioned_task_payload();
+        let json = serde_json::to_string(&payload).unwrap();
+
+        let deserialized: TaskPayload = serde_json::from_str(&json).unwrap();
+
+        assert!(deserialized.partition_context.is_some());
+        let ctx = deserialized.partition_context.unwrap();
+        assert_eq!(ctx.partition_key, "2024-01-15");
+        assert_eq!(ctx.partition_type.as_deref(), Some("daily"));
+        assert_eq!(ctx.timezone.as_deref(), Some("UTC"));
+    }
+
+    #[test]
+    fn partition_context_round_trips_through_base64() {
+        // This simulates the Cloud Tasks payload encoding
+        let payload = create_partitioned_task_payload();
+        let json_bytes = serde_json::to_vec(&payload).unwrap();
+        let base64_encoded = STANDARD.encode(&json_bytes);
+
+        // Decode and verify
+        let decoded_bytes = STANDARD.decode(&base64_encoded).unwrap();
+        let decoded: TaskPayload = serde_json::from_slice(&decoded_bytes).unwrap();
+
+        assert!(decoded.partition_context.is_some());
+        let ctx = decoded.partition_context.unwrap();
+        assert_eq!(ctx.partition_key, "2024-01-15");
+    }
+
+    // ============================================================
+    // Backward Compatibility Tests
+    // ============================================================
+
+    #[test]
+    fn payload_without_partition_context_serializes() {
+        let payload = create_non_partitioned_task_payload();
+        let json = serde_json::to_string(&payload).unwrap();
+
+        // partition_context should be omitted (skip_serializing_if)
+        assert!(!json.contains("partition_context"));
+    }
+
+    #[test]
+    fn old_payload_without_partition_context_deserializes() {
+        // This simulates receiving an old-format payload from an older orchestrator
+        let old_json = r#"{
+            "execution_id": "550e8400-e29b-41d4-a716-446655440000",
+            "workflow_id": "550e8400-e29b-41d4-a716-446655440001",
+            "tenant_id": "test-tenant",
+            "idempotency_key": null,
+            "execution_plan": []
+        }"#;
+
+        let payload: TaskPayload = serde_json::from_str(old_json).unwrap();
+        assert!(payload.partition_context.is_none());
+        assert_eq!(payload.tenant_id, "test-tenant");
+    }
+
+    #[test]
+    fn null_partition_context_deserializes() {
+        // Explicit null should also work
+        let json = r#"{
+            "execution_id": "550e8400-e29b-41d4-a716-446655440000",
+            "workflow_id": "550e8400-e29b-41d4-a716-446655440001",
+            "tenant_id": "test-tenant",
+            "idempotency_key": null,
+            "execution_plan": [],
+            "partition_context": null
+        }"#;
+
+        let payload: TaskPayload = serde_json::from_str(json).unwrap();
+        assert!(payload.partition_context.is_none());
+    }
+
+    // ============================================================
+    // JSON Escaping Security Tests
+    // ============================================================
+
+    #[test]
+    fn partition_key_with_special_characters_escapes_correctly() {
+        // Test that special characters are properly escaped
+        let ctx =
+            PartitionExecutionContext::new("2024-01-15 10:00:00").with_partition_type("hourly");
+
+        let json = serde_json::to_string(&ctx).unwrap();
+        let deserialized: PartitionExecutionContext = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(deserialized.partition_key, "2024-01-15 10:00:00");
+    }
+
+    #[test]
+    fn partition_key_with_quotes_escapes_correctly() {
+        // Test that quotes are properly escaped (prevents injection)
+        let ctx = PartitionExecutionContext::new(r#"2024-01-15"test"#);
+
+        let json = serde_json::to_string(&ctx).unwrap();
+
+        // Should contain escaped quotes
+        assert!(json.contains(r#"\""#) || json.contains(r#"\"test"#));
+
+        // Should round-trip correctly
+        let deserialized: PartitionExecutionContext = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.partition_key, r#"2024-01-15"test"#);
+    }
+
+    #[test]
+    fn partition_key_with_newlines_escapes_correctly() {
+        // Test that newlines don't break JSON
+        let ctx = PartitionExecutionContext::new("2024-01-15\n2024-01-16");
+
+        let json = serde_json::to_string(&ctx).unwrap();
+
+        // Should contain escaped newline
+        assert!(json.contains(r"\n"));
+
+        // Should round-trip correctly
+        let deserialized: PartitionExecutionContext = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.partition_key, "2024-01-15\n2024-01-16");
+    }
+
+    #[test]
+    fn partition_key_with_unicode_escapes_correctly() {
+        // Test that unicode characters are handled correctly
+        let ctx = PartitionExecutionContext::new("2024-01-15_日本語");
+
+        let json = serde_json::to_string(&ctx).unwrap();
+
+        // Should round-trip correctly
+        let deserialized: PartitionExecutionContext = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.partition_key, "2024-01-15_日本語");
+    }
+
+    #[test]
+    fn partition_context_with_all_fields_serializes() {
+        // Test full context with dimensions and upstream partitions
+        let ctx = PartitionExecutionContext::new("2024-01-15|us-west")
+            .with_partition_type("daily")
+            .with_timezone("America/Los_Angeles")
+            .with_format("%Y-%m-%d|%s")
+            .with_dimension("date", "2024-01-15")
+            .with_dimension("region", "us-west")
+            .with_upstream_partition("raw_data", vec!["2024-01-14".into(), "2024-01-15".into()]);
+
+        let json = serde_json::to_string(&ctx).unwrap();
+        let deserialized: PartitionExecutionContext = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(deserialized.partition_key, "2024-01-15|us-west");
+        assert_eq!(deserialized.partition_type.as_deref(), Some("daily"));
+        assert_eq!(
+            deserialized.timezone.as_deref(),
+            Some("America/Los_Angeles")
+        );
+        assert_eq!(deserialized.format.as_deref(), Some("%Y-%m-%d|%s"));
+        assert_eq!(deserialized.get_dimension("date"), Some("2024-01-15"));
+        assert_eq!(deserialized.get_dimension("region"), Some("us-west"));
+        assert_eq!(
+            deserialized.get_upstream_partitions("raw_data"),
+            Some(&vec!["2024-01-14".into(), "2024-01-15".into()])
+        );
+    }
+
+    // ============================================================
+    // Environment Variable Format Tests
+    // ============================================================
+
+    #[test]
+    fn partition_context_json_for_env_var() {
+        // Verify the JSON format that gets passed to SERVO_PARTITION_CONTEXT
+        let ctx = PartitionExecutionContext::new("2024-01-15")
+            .with_partition_type("daily")
+            .with_timezone("UTC");
+
+        let json = serde_json::to_string(&ctx).unwrap();
+
+        // Parse as generic JSON to verify structure
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(parsed["partition_key"], "2024-01-15");
+        assert_eq!(parsed["partition_type"], "daily");
+        assert_eq!(parsed["timezone"], "UTC");
+    }
+
+    #[test]
+    fn empty_optional_fields_not_in_json() {
+        // Verify skip_serializing_if works for cleaner env var
+        let ctx = PartitionExecutionContext::new("2024-01-15");
+        let json = serde_json::to_string(&ctx).unwrap();
+
+        // Parse as generic JSON
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+
+        // These should be absent, not null
+        assert!(parsed.get("partition_type").is_none());
+        assert!(parsed.get("timezone").is_none());
+        assert!(parsed.get("dimensions").is_none());
+        assert!(parsed.get("upstream_partitions").is_none());
+    }
+}

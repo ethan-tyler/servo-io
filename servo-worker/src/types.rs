@@ -4,6 +4,7 @@
 //! and the worker.
 
 use serde::{Deserialize, Serialize};
+use servo_core::PartitionExecutionContext;
 use uuid::Uuid;
 
 /// Payload for scheduler-triggered workflow execution
@@ -45,6 +46,13 @@ pub struct TaskPayload {
     /// This eliminates the need for the worker to compile workflows on the hot path,
     /// reducing latency by 50-100ms per execution.
     pub execution_plan: Vec<Uuid>,
+
+    /// Partition context for partitioned asset execution
+    ///
+    /// When present, this provides the partition key and metadata for the
+    /// compute function being executed. Used by backfill operations.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub partition_context: Option<PartitionExecutionContext>,
 }
 
 /// Response from the execute endpoint
@@ -118,6 +126,7 @@ mod tests {
             tenant_id: "tenant-123".to_string(),
             idempotency_key: Some("idempotency-key".to_string()),
             execution_plan: vec![Uuid::new_v4(), Uuid::new_v4()],
+            partition_context: None,
         };
 
         let json = serde_json::to_string(&payload).unwrap();
@@ -130,6 +139,49 @@ mod tests {
             payload.execution_plan.len(),
             deserialized.execution_plan.len()
         );
+        assert!(deserialized.partition_context.is_none());
+    }
+
+    #[test]
+    fn test_task_payload_with_partition_context() {
+        let partition_ctx = PartitionExecutionContext::new("2024-01-15")
+            .with_partition_type("daily")
+            .with_timezone("UTC");
+
+        let payload = TaskPayload {
+            execution_id: Uuid::new_v4(),
+            workflow_id: Uuid::new_v4(),
+            tenant_id: "tenant-123".to_string(),
+            idempotency_key: None,
+            execution_plan: vec![],
+            partition_context: Some(partition_ctx),
+        };
+
+        let json = serde_json::to_string(&payload).unwrap();
+        assert!(json.contains("partition_context"));
+        assert!(json.contains("2024-01-15"));
+
+        let deserialized: TaskPayload = serde_json::from_str(&json).unwrap();
+        assert!(deserialized.partition_context.is_some());
+        let ctx = deserialized.partition_context.unwrap();
+        assert_eq!(ctx.partition_key, "2024-01-15");
+        assert_eq!(ctx.partition_type.as_deref(), Some("daily"));
+    }
+
+    #[test]
+    fn test_task_payload_backward_compatible() {
+        // Payloads without partition_context should still deserialize
+        let json = r#"{
+            "execution_id": "550e8400-e29b-41d4-a716-446655440000",
+            "workflow_id": "550e8400-e29b-41d4-a716-446655440001",
+            "tenant_id": "test-tenant",
+            "idempotency_key": null,
+            "execution_plan": []
+        }"#;
+
+        let payload: TaskPayload = serde_json::from_str(json).unwrap();
+        assert!(payload.partition_context.is_none());
+        assert_eq!(payload.tenant_id, "test-tenant");
     }
 
     #[test]

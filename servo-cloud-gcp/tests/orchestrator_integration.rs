@@ -104,7 +104,14 @@ async fn test_task_enqueuer_implementation() {
 
     // This will fail with mock credentials
     let result = queue
-        .enqueue(execution_id, workflow_id, tenant_id, None, execution_plan)
+        .enqueue(
+            execution_id,
+            workflow_id,
+            tenant_id,
+            None,
+            execution_plan,
+            None,
+        )
         .await;
 
     // With mock credentials, we expect authentication failure

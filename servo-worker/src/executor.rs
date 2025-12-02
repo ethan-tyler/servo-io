@@ -11,6 +11,7 @@ use crate::check_validator::{validate_check, AssetOutput};
 use crate::metrics::{record_check_execution, record_execution, Timer};
 use crate::pii::PiiFilter;
 use crate::types::TaskPayload;
+use servo_core::PartitionExecutionContext;
 use servo_runtime::state_machine::ExecutionState;
 use servo_runtime::ExecutionOrchestrator;
 use servo_storage::models::CheckResultModel;
@@ -159,7 +160,8 @@ impl WorkflowExecutor {
             workflow_id,
             tenant_id: tenant_id.to_string(),
             idempotency_key: None,
-            execution_plan: vec![], // Executor will compile the workflow
+            execution_plan: vec![],  // Executor will compile the workflow
+            partition_context: None, // No partition context for scheduled runs
         };
 
         // Execute the workflow (this will compile the execution plan)
@@ -340,7 +342,9 @@ impl WorkflowExecutor {
             );
 
             // Execute the asset and get output data
-            let asset_output = self.execute_asset(*asset_id, &tenant_id).await?;
+            let asset_output = self
+                .execute_asset(*asset_id, &tenant_id, payload.partition_context.as_ref())
+                .await?;
 
             // Run data quality checks for this asset with the output data
             let check_results = self
@@ -390,18 +394,24 @@ impl WorkflowExecutor {
     /// If compute_fn_module/compute_fn_function are not set, returns sample data
     /// for backwards compatibility during development.
     #[instrument(
-        skip(self),
+        skip(self, partition_context),
         fields(
             otel.name = "executor.execute_asset",
             asset_id = %asset_id,
             tenant_id = %tenant_id.as_str(),
+            partition_key = tracing::field::Empty,
         )
     )]
     async fn execute_asset(
         &self,
         asset_id: Uuid,
         tenant_id: &TenantId,
+        partition_context: Option<&PartitionExecutionContext>,
     ) -> Result<AssetOutput, ExecutionError> {
+        // Record partition key in span if present
+        if let Some(ctx) = partition_context {
+            tracing::Span::current().record("partition_key", ctx.partition_key.as_str());
+        }
         // Fetch asset definition to understand what we're executing
         let asset = self
             .storage
@@ -422,8 +432,15 @@ impl WorkflowExecutor {
         match (&asset.compute_fn_module, &asset.compute_fn_function) {
             (Some(module), Some(function)) => {
                 // Execute real Python function
-                self.execute_python_asset(&asset.name, module, function, asset_id, tenant_id)
-                    .await
+                self.execute_python_asset(
+                    &asset.name,
+                    module,
+                    function,
+                    asset_id,
+                    tenant_id,
+                    partition_context,
+                )
+                .await
             }
             _ => {
                 // No compute function defined - use sample data for backwards compatibility
@@ -447,6 +464,10 @@ impl WorkflowExecutor {
     ///
     /// Invokes the Python function specified by module and function name,
     /// capturing output and handling errors.
+    ///
+    /// If partition_context is provided (for backfill operations), it will be
+    /// passed to the Python process via the SERVO_PARTITION_CONTEXT environment
+    /// variable as a JSON string.
     async fn execute_python_asset(
         &self,
         asset_name: &str,
@@ -454,11 +475,13 @@ impl WorkflowExecutor {
         function: &str,
         asset_id: Uuid,
         tenant_id: &TenantId,
+        partition_context: Option<&PartitionExecutionContext>,
     ) -> Result<AssetOutput, ExecutionError> {
         info!(
             asset_name = %asset_name,
             module = %module,
             function = %function,
+            partition_key = ?partition_context.map(|c| &c.partition_key),
             "Executing Python asset function"
         );
 
@@ -482,18 +505,27 @@ except Exception as e:
             module, function, function, asset_name, asset_name
         );
 
-        // Execute Python subprocess
-        let output = tokio::process::Command::new("python3")
-            .arg("-c")
+        // Build the command with base environment variables
+        let mut cmd = tokio::process::Command::new("python3");
+        cmd.arg("-c")
             .arg(&python_code)
             .env("SERVO_ASSET_ID", asset_id.to_string())
             .env("SERVO_ASSET_NAME", asset_name)
-            .env("SERVO_TENANT_ID", tenant_id.as_str())
-            .output()
-            .await
-            .map_err(|e| {
-                ExecutionError::Internal(format!("Failed to spawn Python process: {}", e))
-            })?;
+            .env("SERVO_TENANT_ID", tenant_id.as_str());
+
+        // Add partition context as JSON if present
+        if let Some(ctx) = partition_context {
+            if let Ok(ctx_json) = serde_json::to_string(ctx) {
+                cmd.env("SERVO_PARTITION_CONTEXT", ctx_json);
+                // Also provide partition_key as a simple string for convenience
+                cmd.env("SERVO_PARTITION_KEY", &ctx.partition_key);
+            }
+        }
+
+        // Execute Python subprocess
+        let output = cmd.output().await.map_err(|e| {
+            ExecutionError::Internal(format!("Failed to spawn Python process: {}", e))
+        })?;
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
