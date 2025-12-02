@@ -99,6 +99,12 @@ enum Commands {
         #[command(subcommand)]
         action: BackfillAction,
     },
+
+    /// Inspect partition information
+    Partition {
+        #[command(subcommand)]
+        action: PartitionAction,
+    },
 }
 
 #[derive(Subcommand)]
@@ -176,6 +182,49 @@ enum BackfillAction {
         /// Reason for cancellation (optional)
         #[arg(long)]
         reason: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum PartitionAction {
+    /// Show status of a specific partition
+    Status {
+        /// Asset name
+        asset: String,
+
+        /// Partition key to check
+        partition_key: String,
+
+        /// Tenant ID
+        #[arg(long, env = "TENANT_ID")]
+        tenant_id: String,
+    },
+
+    /// Show upstream partition dependencies
+    Deps {
+        /// Asset name
+        asset: String,
+
+        /// Partition key to check dependencies for
+        partition_key: String,
+
+        /// Tenant ID
+        #[arg(long, env = "TENANT_ID")]
+        tenant_id: String,
+    },
+
+    /// List partitions for an asset
+    List {
+        /// Asset name
+        asset: String,
+
+        /// Tenant ID
+        #[arg(long, env = "TENANT_ID")]
+        tenant_id: String,
+
+        /// Maximum number of partitions to show
+        #[arg(long, default_value = "50")]
+        limit: usize,
     },
 }
 
@@ -320,6 +369,36 @@ async fn main() -> anyhow::Result<()> {
                 }
                 BackfillAction::Cancel { job_id, reason } => {
                     commands::backfill::cancel_job(&job_id, reason.as_deref(), &database_url)
+                        .await?;
+                }
+            }
+        }
+        Commands::Partition { action } => {
+            let database_url = resolve_db_url(cli.database_url.clone());
+
+            match action {
+                PartitionAction::Status {
+                    asset,
+                    partition_key,
+                    tenant_id,
+                } => {
+                    commands::partition::status(&asset, &partition_key, &tenant_id, &database_url)
+                        .await?;
+                }
+                PartitionAction::Deps {
+                    asset,
+                    partition_key,
+                    tenant_id,
+                } => {
+                    commands::partition::deps(&asset, &partition_key, &tenant_id, &database_url)
+                        .await?;
+                }
+                PartitionAction::List {
+                    asset,
+                    tenant_id,
+                    limit,
+                } => {
+                    commands::partition::list(&asset, &tenant_id, &database_url, Some(limit))
                         .await?;
                 }
             }

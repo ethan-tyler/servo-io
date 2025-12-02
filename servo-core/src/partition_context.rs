@@ -281,4 +281,96 @@ mod tests {
         assert!(ctx.partition_type.is_none());
         assert!(!ctx.is_multi_dimensional());
     }
+
+    #[test]
+    fn test_multi_dimensional_json_parsing() {
+        // Test parsing a JSON multi-dimensional partition key
+        let json_key = r#"{"date": "2024-01-15", "region": "us-west"}"#;
+
+        // Simulate what build_partition_context does
+        let mut ctx = PartitionExecutionContext::new(json_key);
+        if json_key.starts_with('{') {
+            if let Ok(parsed) =
+                serde_json::from_str::<std::collections::HashMap<String, String>>(json_key)
+            {
+                for (dim_name, dim_value) in parsed {
+                    ctx = ctx.with_dimension(dim_name, dim_value);
+                }
+            }
+        }
+
+        assert_eq!(ctx.partition_key, json_key);
+        assert!(ctx.is_multi_dimensional());
+        assert_eq!(ctx.get_dimension("date"), Some("2024-01-15"));
+        assert_eq!(ctx.get_dimension("region"), Some("us-west"));
+    }
+
+    #[test]
+    fn test_multi_dimensional_three_dimensions() {
+        let json_key = r#"{"date": "2024-01-15", "region": "eu", "product": "widgets"}"#;
+
+        let mut ctx = PartitionExecutionContext::new(json_key);
+        if let Ok(parsed) =
+            serde_json::from_str::<std::collections::HashMap<String, String>>(json_key)
+        {
+            for (dim_name, dim_value) in parsed {
+                ctx = ctx.with_dimension(dim_name, dim_value);
+            }
+        }
+
+        assert!(ctx.is_multi_dimensional());
+        assert_eq!(ctx.get_dimension("date"), Some("2024-01-15"));
+        assert_eq!(ctx.get_dimension("region"), Some("eu"));
+        assert_eq!(ctx.get_dimension("product"), Some("widgets"));
+    }
+
+    #[test]
+    fn test_simple_partition_key_not_parsed_as_json() {
+        // A simple partition key like "2024-01-15" should NOT be parsed as JSON
+        let simple_key = "2024-01-15";
+        let ctx = PartitionExecutionContext::new(simple_key);
+
+        // Without the JSON parsing logic, dimensions should be empty
+        assert!(!ctx.is_multi_dimensional());
+        assert_eq!(ctx.get_dimension("date"), None);
+    }
+
+    #[test]
+    fn test_invalid_json_gracefully_handled() {
+        // Invalid JSON should not cause errors, just skip dimension parsing
+        let invalid_json = "{not valid json}";
+
+        let mut ctx = PartitionExecutionContext::new(invalid_json);
+        if invalid_json.starts_with('{') {
+            if let Ok(parsed) =
+                serde_json::from_str::<std::collections::HashMap<String, String>>(invalid_json)
+            {
+                for (dim_name, dim_value) in parsed {
+                    ctx = ctx.with_dimension(dim_name, dim_value);
+                }
+            }
+            // If parsing fails, dimensions remain empty
+        }
+
+        assert_eq!(ctx.partition_key, invalid_json);
+        assert!(!ctx.is_multi_dimensional());
+    }
+
+    #[test]
+    fn test_json_serialization_with_dimensions() {
+        let ctx = PartitionExecutionContext::new(r#"{"date": "2024-01-15", "region": "us"}"#)
+            .with_dimension("date", "2024-01-15")
+            .with_dimension("region", "us");
+
+        let json = serde_json::to_string(&ctx).unwrap();
+        assert!(json.contains("dimensions"));
+        assert!(json.contains("date"));
+        assert!(json.contains("region"));
+
+        // Deserialize and verify
+        let deserialized: PartitionExecutionContext = serde_json::from_str(&json).unwrap();
+        assert!(deserialized.is_multi_dimensional());
+        assert_eq!(deserialized.get_dimension("date"), Some("2024-01-15"));
+        assert_eq!(deserialized.get_dimension("region"), Some("us"));
+    }
 }

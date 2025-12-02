@@ -111,6 +111,22 @@ class RuntimePartitionContext:
         """
         return self.upstream_partitions.get(asset_name)
 
+    def get_all_dimensions(self) -> dict[str, str]:
+        """Get all dimension values for multi-dimensional partitions.
+
+        Returns:
+            Dictionary of dimension name -> value pairs
+        """
+        return dict(self.dimensions)
+
+    def is_multi_dimensional(self) -> bool:
+        """Check if this is a multi-dimensional partition.
+
+        Returns:
+            True if partition has multiple dimensions
+        """
+        return len(self.dimensions) > 0
+
     @classmethod
     def from_json(cls, data: dict[str, Any]) -> RuntimePartitionContext:
         """Create from JSON dictionary.
@@ -314,3 +330,94 @@ def clear_context_cache() -> None:
     """
     global _cached_context
     _cached_context = None
+
+
+def get_dimension(name: str) -> str | None:
+    """Get a dimension value for multi-dimensional partitions.
+
+    Convenience function for accessing dimension values from the partition context.
+
+    Args:
+        name: Dimension name
+
+    Returns:
+        Dimension value or None if not found or not partitioned
+
+    Example:
+        from servo import get_dimension
+
+        @asset(name="regional_sales", partition=MultiPartition(
+            date=DailyPartition(...),
+            region=StaticPartition(values=["us", "eu"])
+        ))
+        def regional_sales():
+            region = get_dimension("region")  # e.g., "us"
+            date = get_dimension("date")  # e.g., "2024-01-15"
+            return load_sales(region=region, date=date)
+    """
+    ctx = get_context()
+    if ctx.partition:
+        return ctx.partition.get_dimension(name)
+    return None
+
+
+def get_upstream_partitions(asset_name: str) -> list[str] | None:
+    """Get upstream partition keys for a specific asset.
+
+    Convenience function for accessing upstream partition dependencies.
+
+    Args:
+        asset_name: Name of the upstream asset
+
+    Returns:
+        List of partition keys or None if not found
+
+    Example:
+        from servo import get_upstream_partitions
+
+        @asset(name="weekly_summary", depends_on=["daily_sales"])
+        def weekly_summary():
+            # Get all daily partitions that feed into this weekly partition
+            daily_keys = get_upstream_partitions("daily_sales")
+            # e.g., ["2024-01-15", "2024-01-16", ..., "2024-01-21"]
+            return aggregate_daily_sales(daily_keys)
+    """
+    ctx = get_context()
+    if ctx.partition:
+        return ctx.partition.get_upstream_partitions(asset_name)
+    return None
+
+
+def get_all_dimensions() -> dict[str, str]:
+    """Get all dimension values for multi-dimensional partitions.
+
+    Convenience function for accessing all dimension values at once.
+
+    Returns:
+        Dictionary of dimension name -> value pairs, empty if not multi-dimensional
+
+    Example:
+        from servo import get_all_dimensions
+
+        @asset(name="regional_sales", partition=MultiPartition(...))
+        def regional_sales():
+            dims = get_all_dimensions()
+            # e.g., {"date": "2024-01-15", "region": "us"}
+            return process_partition(**dims)
+    """
+    ctx = get_context()
+    if ctx.partition:
+        return ctx.partition.get_all_dimensions()
+    return {}
+
+
+def is_multi_dimensional() -> bool:
+    """Check if the current partition is multi-dimensional.
+
+    Returns:
+        True if partition has multiple dimensions, False otherwise
+    """
+    ctx = get_context()
+    if ctx.partition:
+        return ctx.partition.is_multi_dimensional()
+    return False

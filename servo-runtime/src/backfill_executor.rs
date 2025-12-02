@@ -41,16 +41,36 @@ use crate::metrics::{
 use crate::orchestrator::ExecutionOrchestrator;
 use crate::Result;
 use chrono::Utc;
-use servo_core::{PartitionConfig, PartitionExecutionContext};
+use servo_core::{infer_mapping, PartitionConfig, PartitionExecutionContext, PartitionMapper};
 use servo_storage::{
     BackfillJobModel, BackfillPartitionModel, BackfillProgressUpdate, CreateUpstreamChildJobParams,
     PostgresStorage, TenantId,
 };
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::interval;
 use tracing::{debug, error, info, instrument, warn};
 use uuid::Uuid;
+
+/// Cached information about an upstream asset for partition mapping
+#[derive(Debug, Clone)]
+pub struct UpstreamAssetInfo {
+    /// Asset ID
+    pub asset_id: Uuid,
+    /// Asset name
+    pub name: String,
+    /// Partition configuration (if partitioned)
+    pub partition_config: Option<PartitionConfig>,
+}
+
+/// Cache for upstream dependency information per job
+/// This avoids repeated database lookups when processing multiple partitions
+#[derive(Debug, Default)]
+pub struct JobDependencyCache {
+    /// Upstream asset info keyed by asset name
+    pub upstream_assets: HashMap<String, UpstreamAssetInfo>,
+}
 
 /// Configuration for the backfill executor
 #[derive(Debug, Clone)]
@@ -234,6 +254,10 @@ impl BackfillExecutor {
             return self.handle_upstream_propagation(&job).await;
         }
 
+        // Load upstream dependency cache once for the entire job
+        // This avoids N database lookups when processing N partitions
+        let upstream_cache = self.load_upstream_dependency_cache(job.asset_id).await.ok();
+
         let mut completed_count = job.completed_partitions;
         let mut failed_count = job.failed_partitions;
         let skipped_count = job.skipped_partitions;
@@ -326,7 +350,10 @@ impl BackfillExecutor {
 
                     // Execute the partition and track duration
                     let partition_start = std::time::Instant::now();
-                    match self.execute_partition(&job, &partition).await {
+                    match self
+                        .execute_partition(&job, &partition, upstream_cache.as_ref())
+                        .await
+                    {
                         Ok(_) => {
                             let duration_ms = partition_start.elapsed().as_millis() as u64;
                             let duration_secs = duration_ms as f64 / 1000.0;
@@ -850,11 +877,14 @@ impl BackfillExecutor {
     }
 
     /// Execute a single partition (already claimed and in running state)
-    #[instrument(skip(self, job), fields(partition_key = %partition.partition_key, attempt = partition.attempt_count))]
+    ///
+    /// Optionally accepts an upstream dependency cache for partition mapping.
+    #[instrument(skip(self, job, upstream_cache), fields(partition_key = %partition.partition_key, attempt = partition.attempt_count))]
     async fn execute_partition(
         &self,
         job: &BackfillJobModel,
         partition: &BackfillPartitionModel,
+        upstream_cache: Option<&JobDependencyCache>,
     ) -> Result<()> {
         let start = std::time::Instant::now();
 
@@ -864,7 +894,12 @@ impl BackfillExecutor {
             job.id, partition.partition_key, partition.attempt_count
         );
         let execution_result = self
-            .execute_asset_partition(job.asset_id, &partition.partition_key, &idempotency_key)
+            .execute_asset_partition(
+                job.asset_id,
+                &partition.partition_key,
+                &idempotency_key,
+                upstream_cache,
+            )
             .await;
 
         let duration_ms = start.elapsed().as_millis() as i64;
@@ -904,11 +939,14 @@ impl BackfillExecutor {
     }
 
     /// Execute an asset for a specific partition with idempotency
+    ///
+    /// Optionally accepts an upstream dependency cache for partition mapping.
     async fn execute_asset_partition(
         &self,
         asset_id: Uuid,
         partition_key: &str,
         idempotency_key: &str,
+        upstream_cache: Option<&JobDependencyCache>,
     ) -> Result<Uuid> {
         debug!(
             asset_id = %asset_id,
@@ -940,7 +978,8 @@ impl BackfillExecutor {
 
         // Build partition execution context from asset's partition config
         let partition_config = asset.partition_config.as_ref().map(|j| j.0.clone());
-        let partition_context = self.build_partition_context(partition_key, &partition_config);
+        let partition_context =
+            self.build_partition_context(partition_key, &partition_config, upstream_cache);
 
         // Start execution with partition context to pass partition info to worker
         let execution_id = self
@@ -967,12 +1006,31 @@ impl BackfillExecutor {
     }
 
     /// Build a partition execution context from asset's partition config
+    ///
+    /// This method also resolves upstream partition dependencies using the provided cache.
     fn build_partition_context(
         &self,
         partition_key: &str,
         partition_config: &Option<serde_json::Value>,
+        upstream_cache: Option<&JobDependencyCache>,
     ) -> PartitionExecutionContext {
         let mut ctx = PartitionExecutionContext::new(partition_key);
+
+        // Parse multi-dimensional partition keys (JSON format like {"date": "2024-01-15", "region": "us"})
+        if partition_key.starts_with('{') {
+            if let Ok(parsed) =
+                serde_json::from_str::<std::collections::HashMap<String, String>>(partition_key)
+            {
+                for (dim_name, dim_value) in parsed {
+                    ctx = ctx.with_dimension(dim_name, dim_value);
+                }
+            }
+        }
+
+        // Parse partition config for type info
+        let parsed_config: Option<PartitionConfig> = partition_config
+            .as_ref()
+            .and_then(|c| serde_json::from_value(c.clone()).ok());
 
         // Extract partition type and timezone from partition_config if available
         if let Some(config) = partition_config {
@@ -1000,7 +1058,114 @@ impl BackfillExecutor {
             }
         }
 
+        // Resolve upstream partition dependencies if cache is available
+        if let Some(cache) = upstream_cache {
+            if !cache.upstream_assets.is_empty() {
+                let upstream_partitions =
+                    self.resolve_upstream_partitions(partition_key, &parsed_config, cache);
+                for (asset_name, partition_keys) in upstream_partitions {
+                    ctx = ctx.with_upstream_partition(asset_name, partition_keys);
+                }
+            }
+        }
+
         ctx
+    }
+
+    /// Load upstream dependency cache for a job
+    ///
+    /// Fetches all direct upstream dependencies for the asset and their partition configs.
+    /// This is done once per job to avoid repeated database lookups for each partition.
+    #[instrument(skip(self), fields(asset_id = %asset_id))]
+    async fn load_upstream_dependency_cache(&self, asset_id: Uuid) -> Result<JobDependencyCache> {
+        let mut cache = JobDependencyCache::default();
+
+        // Get upstream dependencies (what this asset depends on)
+        let upstream_deps = self
+            .storage
+            .get_upstream_dependencies(asset_id, &self.tenant_id)
+            .await
+            .map_err(|e| crate::Error::Internal(e.to_string()))?;
+
+        for dep in upstream_deps {
+            // Load the upstream asset to get its name and partition config
+            match self
+                .storage
+                .get_asset(dep.upstream_asset_id, &self.tenant_id)
+                .await
+            {
+                Ok(upstream_asset) => {
+                    let partition_config = upstream_asset
+                        .partition_config
+                        .as_ref()
+                        .and_then(|j| serde_json::from_value(j.0.clone()).ok());
+
+                    cache.upstream_assets.insert(
+                        upstream_asset.name.clone(),
+                        UpstreamAssetInfo {
+                            asset_id: upstream_asset.id,
+                            name: upstream_asset.name,
+                            partition_config,
+                        },
+                    );
+                }
+                Err(e) => {
+                    warn!(
+                        upstream_asset_id = %dep.upstream_asset_id,
+                        error = %e,
+                        "Failed to load upstream asset info"
+                    );
+                }
+            }
+        }
+
+        debug!(
+            upstream_count = cache.upstream_assets.len(),
+            "Loaded upstream dependency cache"
+        );
+
+        Ok(cache)
+    }
+
+    /// Resolve upstream partition keys for a given downstream partition
+    ///
+    /// Uses the partition mapping logic to determine which upstream partition keys
+    /// are required for the given downstream partition key.
+    fn resolve_upstream_partitions(
+        &self,
+        downstream_key: &str,
+        downstream_config: &Option<PartitionConfig>,
+        upstream_cache: &JobDependencyCache,
+    ) -> HashMap<String, Vec<String>> {
+        let mut upstream_partitions = HashMap::new();
+
+        let downstream_type = downstream_config.as_ref().map(|c| &c.partition_type);
+
+        for (name, upstream_info) in &upstream_cache.upstream_assets {
+            let upstream_keys = match (&upstream_info.partition_config, downstream_type) {
+                (Some(up_config), Some(down_type)) => {
+                    // Try to infer mapping between partition types
+                    match infer_mapping(&up_config.partition_type, down_type) {
+                        Ok(mapping) => {
+                            let mapper = PartitionMapper::new(mapping);
+                            mapper.get_upstream_partitions(downstream_key)
+                        }
+                        Err(_) => {
+                            // If mapping inference fails, use identity mapping
+                            vec![downstream_key.to_string()]
+                        }
+                    }
+                }
+                _ => {
+                    // No partition config available, use identity mapping
+                    vec![downstream_key.to_string()]
+                }
+            };
+
+            upstream_partitions.insert(name.clone(), upstream_keys);
+        }
+
+        upstream_partitions
     }
 
     /// Wait for an execution to complete
