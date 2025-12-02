@@ -285,6 +285,7 @@ mod tests {
     use super::*;
     use crate::graph::{LineageEdge, LineageNode};
 
+    #[allow(dead_code)]
     fn create_test_graph() -> LineageGraph {
         // Create a graph: A -> B -> C -> D
         //                       \-> E
