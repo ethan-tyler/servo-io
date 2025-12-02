@@ -26,16 +26,33 @@ use servo_storage::{AssetModel, PostgresStorage, TenantId, WorkflowModel};
 use std::sync::Arc;
 use uuid::Uuid;
 
-/// Check if Python is available in the environment
+/// Check if Python tests can run in the current environment
 ///
-/// Returns true if python3 can be executed, false otherwise.
-/// Used to skip Python execution tests in CI environments without Python.
-fn is_python_available() -> bool {
-    std::process::Command::new("python3")
+/// Returns true if:
+/// 1. python3 can be executed
+/// 2. The fixtures directory exists at the expected path
+///
+/// Used to skip Python execution tests in CI environments without proper setup.
+fn can_run_python_tests() -> bool {
+    // Check Python is available
+    let python_ok = std::process::Command::new("python3")
         .arg("--version")
         .output()
         .map(|o| o.status.success())
-        .unwrap_or(false)
+        .unwrap_or(false);
+
+    if !python_ok {
+        return false;
+    }
+
+    // Check fixtures directory exists
+    let fixtures_exists = std::env::current_dir()
+        .ok()
+        .map(|p| p.join("servo-runtime/tests/fixtures"))
+        .filter(|p| p.exists() && p.is_dir())
+        .is_some();
+
+    fixtures_exists
 }
 
 /// Get the app role database URL for RLS-enforced operations
@@ -579,8 +596,8 @@ async fn create_linked_asset(
 #[tokio::test]
 #[ignore]
 async fn test_python_execution_success() {
-    if !is_python_available() {
-        eprintln!("Skipping test: Python not available");
+    if !can_run_python_tests() {
+        eprintln!("Skipping test: Python not available or fixtures directory not found");
         return;
     }
 
@@ -646,8 +663,8 @@ async fn test_python_execution_success() {
 #[tokio::test]
 #[ignore]
 async fn test_python_execution_env_vars() {
-    if !is_python_available() {
-        eprintln!("Skipping test: Python not available");
+    if !can_run_python_tests() {
+        eprintln!("Skipping test: Python not available or fixtures directory not found");
         return;
     }
 
@@ -706,8 +723,8 @@ async fn test_python_execution_env_vars() {
 #[tokio::test]
 #[ignore]
 async fn test_python_execution_missing_compute_fn_module() {
-    if !is_python_available() {
-        eprintln!("Skipping test: Python not available");
+    if !can_run_python_tests() {
+        eprintln!("Skipping test: Python not available or fixtures directory not found");
         return;
     }
 
@@ -743,8 +760,8 @@ async fn test_python_execution_missing_compute_fn_module() {
 #[tokio::test]
 #[ignore]
 async fn test_python_execution_missing_compute_fn_function() {
-    if !is_python_available() {
-        eprintln!("Skipping test: Python not available");
+    if !can_run_python_tests() {
+        eprintln!("Skipping test: Python not available or fixtures directory not found");
         return;
     }
 
@@ -780,8 +797,8 @@ async fn test_python_execution_missing_compute_fn_function() {
 #[tokio::test]
 #[ignore]
 async fn test_python_execution_invalid_module() {
-    if !is_python_available() {
-        eprintln!("Skipping test: Python not available");
+    if !can_run_python_tests() {
+        eprintln!("Skipping test: Python not available or fixtures directory not found");
         return;
     }
 
@@ -818,8 +835,8 @@ async fn test_python_execution_invalid_module() {
 #[tokio::test]
 #[ignore]
 async fn test_python_execution_function_error() {
-    if !is_python_available() {
-        eprintln!("Skipping test: Python not available");
+    if !can_run_python_tests() {
+        eprintln!("Skipping test: Python not available or fixtures directory not found");
         return;
     }
 
@@ -880,8 +897,8 @@ async fn test_python_execution_function_error() {
 #[tokio::test]
 #[ignore]
 async fn test_python_execution_timeout() {
-    if !is_python_available() {
-        eprintln!("Skipping test: Python not available");
+    if !can_run_python_tests() {
+        eprintln!("Skipping test: Python not available or fixtures directory not found");
         return;
     }
 
@@ -940,8 +957,8 @@ async fn test_python_execution_timeout() {
 #[tokio::test]
 #[ignore]
 async fn test_python_execution_multiple_assets_in_order() {
-    if !is_python_available() {
-        eprintln!("Skipping test: Python not available");
+    if !can_run_python_tests() {
+        eprintln!("Skipping test: Python not available or fixtures directory not found");
         return;
     }
 
@@ -1012,8 +1029,8 @@ async fn test_python_execution_multiple_assets_in_order() {
 #[tokio::test]
 #[ignore]
 async fn test_python_execution_stops_on_first_failure() {
-    if !is_python_available() {
-        eprintln!("Skipping test: Python not available");
+    if !can_run_python_tests() {
+        eprintln!("Skipping test: Python not available or fixtures directory not found");
         return;
     }
 
