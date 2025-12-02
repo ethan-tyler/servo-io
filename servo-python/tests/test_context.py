@@ -97,11 +97,13 @@ class TestRuntimePartitionContext:
 
     def test_from_env_with_context(self):
         """Test loading from environment variable."""
-        context_json = json.dumps({
-            "partition_key": "2024-01-15",
-            "partition_type": "daily",
-            "timezone": "UTC",
-        })
+        context_json = json.dumps(
+            {
+                "partition_key": "2024-01-15",
+                "partition_type": "daily",
+                "timezone": "UTC",
+            }
+        )
         with mock.patch.dict(os.environ, {"SERVO_PARTITION_CONTEXT": context_json}):
             ctx = RuntimePartitionContext.from_env()
             assert ctx is not None
@@ -134,10 +136,12 @@ class TestExecutionContext:
             "SERVO_TENANT_ID": "tenant-abc",
             "SERVO_ASSET_ID": "asset-789",
             "SERVO_ASSET_NAME": "daily_sales",
-            "SERVO_PARTITION_CONTEXT": json.dumps({
-                "partition_key": "2024-01-15",
-                "partition_type": "daily",
-            }),
+            "SERVO_PARTITION_CONTEXT": json.dumps(
+                {
+                    "partition_key": "2024-01-15",
+                    "partition_type": "daily",
+                }
+            ),
         }
         with mock.patch.dict(os.environ, env, clear=False):
             ctx = ExecutionContext.from_env()
@@ -185,10 +189,12 @@ class TestConvenienceFunctions:
     def test_get_partition_key_from_context(self):
         """Test getting partition key from full context."""
         env = {
-            "SERVO_PARTITION_CONTEXT": json.dumps({
-                "partition_key": "2024-01-15",
-                "partition_type": "daily",
-            }),
+            "SERVO_PARTITION_CONTEXT": json.dumps(
+                {
+                    "partition_key": "2024-01-15",
+                    "partition_type": "daily",
+                }
+            ),
         }
         with mock.patch.dict(os.environ, env, clear=False):
             key = get_partition_key()
@@ -212,10 +218,12 @@ class TestConvenienceFunctions:
     def test_get_partition_date_from_context(self):
         """Test getting partition date from context."""
         env = {
-            "SERVO_PARTITION_CONTEXT": json.dumps({
-                "partition_key": "2024-01-15",
-                "partition_type": "daily",
-            }),
+            "SERVO_PARTITION_CONTEXT": json.dumps(
+                {
+                    "partition_key": "2024-01-15",
+                    "partition_type": "daily",
+                }
+            ),
         }
         with mock.patch.dict(os.environ, env, clear=False):
             dt = get_partition_date()
@@ -232,10 +240,12 @@ class TestConvenienceFunctions:
     def test_get_partition_datetime(self):
         """Test getting partition datetime."""
         env = {
-            "SERVO_PARTITION_CONTEXT": json.dumps({
-                "partition_key": "2024-01-15T10:30:00",
-                "partition_type": "hourly",
-            }),
+            "SERVO_PARTITION_CONTEXT": json.dumps(
+                {
+                    "partition_key": "2024-01-15T10:30:00",
+                    "partition_type": "hourly",
+                }
+            ),
         }
         with mock.patch.dict(os.environ, env, clear=False):
             dt = get_partition_datetime()
