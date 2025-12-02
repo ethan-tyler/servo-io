@@ -57,7 +57,7 @@
 //!
 //! Or configure via `LocalExecutorConfig`:
 //!
-//! ```rust,ignore
+//! ```text
 //! let mut config = LocalExecutorConfig::default();
 //! config.env_vars.insert(
 //!     "PYTHONPATH".to_string(),
@@ -70,7 +70,7 @@
 //!
 //! If using a virtual environment, point `python_path` to the venv's Python:
 //!
-//! ```rust,ignore
+//! ```text
 //! let mut config = LocalExecutorConfig::default();
 //! config.python_path = PathBuf::from("/path/to/venv/bin/python3");
 //! let executor = LocalExecutor::with_config(storage, tenant_id, config);
@@ -87,7 +87,7 @@
 //!
 //! Set the working directory to your project root where Python packages are located:
 //!
-//! ```rust,ignore
+//! ```text
 //! let mut config = LocalExecutorConfig::default();
 //! config.working_dir = PathBuf::from("/path/to/your/project");
 //! let executor = LocalExecutor::with_config(storage, tenant_id, config);
@@ -125,7 +125,7 @@
 //!
 //! # Example
 //!
-//! ```rust,ignore
+//! ```text
 //! let executor = LocalExecutor::new(storage, tenant_id);
 //! let result = executor.execute(workflow_id).await?;
 //! println!("Execution completed: {:?}", result);
