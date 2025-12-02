@@ -17,6 +17,8 @@
 //! cargo test --package servo-runtime --test local_executor_integration -- --ignored
 //! ```
 
+#![allow(clippy::field_reassign_with_default)]
+
 use servo_runtime::executor::ExecutionId;
 use servo_runtime::local_executor::states;
 use servo_runtime::{Executor, LocalExecutor, LocalExecutorConfig};
