@@ -240,6 +240,20 @@ lazy_static! {
     )
     .expect("servo_backfill_partitions_processed_total metric registration");
 
+    /// Total partitions requeued due to upstream not ready
+    ///
+    /// Labels:
+    /// - tenant_id: Tenant identifier for multi-tenant filtering
+    ///
+    /// High values indicate partitions waiting on upstream dependencies.
+    /// Alert if this spikes without corresponding upstream progress.
+    pub static ref BACKFILL_PARTITION_REQUEUE_TOTAL: IntCounterVec = register_int_counter_vec!(
+        "servo_backfill_partition_requeue_total",
+        "Total partitions requeued waiting for upstream",
+        &["tenant_id"]
+    )
+    .expect("servo_backfill_partition_requeue_total metric registration");
+
     /// Total backfill jobs completed (terminal state reached)
     ///
     /// Labels:
@@ -457,6 +471,7 @@ mod tests {
         // Throughput metrics
         let _ =
             BACKFILL_PARTITIONS_PROCESSED_TOTAL.with_label_values(&["test-tenant", "completed"]);
+        let _ = BACKFILL_PARTITION_REQUEUE_TOTAL.with_label_values(&["test-tenant"]);
         let _ = BACKFILL_JOBS_COMPLETED_TOTAL.with_label_values(&["test-tenant", "completed"]);
         let _ = BACKFILL_JOB_DURATION_SECONDS.with_label_values(&["completed"]);
         let _ = BACKFILL_JOB_CLAIM_LATENCY_SECONDS.with_label_values(&[]);
