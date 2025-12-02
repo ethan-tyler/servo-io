@@ -8,6 +8,15 @@ from servo.asset import (
     validate_dependencies_strict,
 )
 from servo.client import AsyncServoClient, ServoClient
+from servo.context import (
+    ExecutionContext,
+    RuntimePartitionContext,
+    clear_context_cache,
+    get_context,
+    get_partition_date,
+    get_partition_datetime,
+    get_partition_key,
+)
 from servo.exceptions import (
     AssetExecutionError,
     BlockingCheckError,
@@ -74,6 +83,7 @@ __all__ = [
     "DailyPartition",
     "DimensionMapping",
     "DynamicPartition",
+    "ExecutionContext",
     "HourlyPartition",
     "IdentityMapping",
     "Materialization",
@@ -82,6 +92,7 @@ __all__ = [
     "PartitionContext",
     "PartitionDefinition",
     "PartitionMapping",
+    "RuntimePartitionContext",
     "ServoAPIError",
     "ServoClient",
     "ServoConfigError",
@@ -96,6 +107,7 @@ __all__ = [
     "asset_check",
     "check",
     "clear_check_registry",
+    "clear_context_cache",
     "deploy_checks",
     "expect",
     "get_asset",
@@ -103,6 +115,10 @@ __all__ = [
     "get_check",
     "get_check_registry",
     "get_checks_for_asset",
+    "get_context",
+    "get_partition_date",
+    "get_partition_datetime",
+    "get_partition_key",
     "get_workflow",
     "get_workflow_registry",
     "run_checks_for_asset",

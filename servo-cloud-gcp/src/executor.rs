@@ -251,6 +251,7 @@ impl CloudRunExecutor {
                 self.tenant_id.as_str(),
                 idempotency_key,
                 vec![], // Execution plan compiled by worker
+                None,   // No partition context for scheduled executions
             )
             .await
             .map_err(|e| {

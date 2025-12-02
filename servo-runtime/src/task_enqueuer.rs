@@ -1,6 +1,7 @@
 //! Task enqueuer abstraction for cloud-agnostic task queuing
 
 use async_trait::async_trait;
+use servo_core::PartitionExecutionContext;
 use servo_storage::TenantId;
 use uuid::Uuid;
 
@@ -44,6 +45,7 @@ pub trait TaskEnqueuer: Send + Sync {
     /// * `tenant_id` - Tenant identifier for multi-tenant isolation
     /// * `idempotency_key` - Optional idempotency key for deduplication
     /// * `execution_plan` - Pre-compiled execution plan (topologically sorted asset IDs)
+    /// * `partition_context` - Optional partition context for partitioned asset execution
     ///
     /// # Returns
     ///
@@ -62,5 +64,6 @@ pub trait TaskEnqueuer: Send + Sync {
         tenant_id: &TenantId,
         idempotency_key: Option<String>,
         execution_plan: Vec<Uuid>,
+        partition_context: Option<PartitionExecutionContext>,
     ) -> EnqueueResult<String>;
 }
