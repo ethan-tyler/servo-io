@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1764608781818,
+  "lastUpdate": 1764690566850,
   "repoUrl": "https://github.com/ethan-tyler/servo-io",
   "entries": {
     "Rust Benchmark": [
@@ -1354,6 +1354,282 @@ window.BENCHMARK_DATA = {
           {
             "name": "graph_operations/add_single_node",
             "value": 535,
+            "range": "± 1",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "graph_operations/add_edge",
+            "value": 83,
+            "range": "± 3",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "graph_operations/node_count/100",
+            "value": 0,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "graph_operations/node_count/1000",
+            "value": 0,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "graph_operations/node_count/10000",
+            "value": 0,
+            "range": "± 0",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "ethan@urbanskitech.com",
+            "name": "Ethan Urbanski",
+            "username": "ethan-tyler"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "8c7134db8a951ed00ec6b3e91d61925abb82a3f1",
+          "message": "Feat/phase5a backfill complete (#48)\n\n* feat(backfill): add date range backfill support (Increment 2)\n\n- Add --start and --end CLI arguments for date range backfills\n- Add generate_date_range_partitions() function with validation\n- Implement execute_range_backfill() for batch partition creation\n- Add safety limit of 366 partitions per job\n- Check for overlapping active jobs before creating range\n- Add 10 new tests for date range generation\n\n* fix(backfill): address review feedback for Increment 2\n\n- Add TODO comments for asset partitioning validation (requires schema change)\n- Add migration 008 with partial unique index for overlap prevention\n- Add index on active backfill jobs by asset for faster overlap lookups\n- Document that RLS ensures tenant-scoped overlap checks\n\n* feat(backfill): add BackfillExecutor for job execution (Increment 3)\n\n- Add BackfillExecutor service to process pending backfill jobs\n- Implement partition execution logic with workflow triggering\n- Add state transition updates during execution\n- Add heartbeat mechanism for long-running jobs\n- Add progress tracking (completed/failed/skipped counts)\n- Add storage methods: heartbeat, progress, partition state transitions\n- Update CLI documentation to reflect execution is now wired\n\n* fix(backfill): add atomic claiming and stale heartbeat recovery\n\n- Add claim_pending_backfill_job() with FOR UPDATE SKIP LOCKED for\n  safe multi-instance deployment\n- Add claim_pending_partition() with atomic claiming and retry support\n- Implement stale heartbeat recovery to reclaim abandoned jobs\n- Add idempotency keys for workflow triggers (job_id + partition + attempt)\n- Make progress updates idempotent (absolute values instead of increments)\n- Add configurable stale_heartbeat_threshold and partition_timeout\n\nAddresses code review feedback for production-safe concurrent execution.\n\n* feat(backfill): add job cancellation support\n\n- Add cancel_backfill_job() storage method to transition jobs to cancelled\n- Add is_backfill_job_cancelled() helper for executors to check status\n- Add cancel_job() CLI command (servo backfill cancel <job_id>)\n- Executor now checks for cancellation before processing each partition\n- Pending partitions are marked as skipped when job is cancelled\n\nThis enables graceful cancellation of running backfill jobs without\nleaving them in an inconsistent state.\n\n* feat(backfill): add observability metrics for backfill operations\n\nAdd Prometheus metrics for backfill executor operations:\n- servo_backfill_job_claim_total: Track job claims (new/reclaim)\n- servo_backfill_partition_claim_total: Track partition claims (new/retry)\n- servo_backfill_partition_completion_total: Track completions by status\n- servo_backfill_partition_duration_seconds: Histogram of execution times\n- servo_backfill_job_cancellation_total: Track cancellation events\n\nThese metrics enable monitoring of multi-instance executor behavior,\nretry patterns, and performance characteristics in production.\n\n* feat(backfill): add pause/resume support with ETA tracking (Increment 4)\n\n- Add pause/resume job state machine (running -> paused -> resuming -> running)\n- Implement checkpoint persistence for accurate resumption from last partition\n- Add EWMA-based ETA calculation with preservation across pause/resume cycles\n- Add low-cardinality Prometheus metrics (jobs_active, eta_distribution, pause_duration)\n- Deprecate high-cardinality per-job metrics (job_eta_seconds, job_progress_ratio)\n- Refactor update_backfill_job_progress_with_eta to use BackfillProgressUpdate struct\n- Add backfill CLI commands (pause, resume, status --watch)\n- Add 10 integration tests for pause/resume lifecycle\n- Add backfill operations runbook with triage steps and resolution procedures\n- Add 7 backfill alerting rules to servo-alerts.yaml\n- Update CLI and runtime documentation\n\n* feat(backfill): add upstream propagation and advanced observability (Increments 5-6)\n\nUpstream Propagation (Increment 5):\n- Add include_upstream flag and max_upstream_depth to backfill jobs\n- Create upstream child jobs automatically based on asset lineage\n- Track upstream_job_count and completed_upstream_jobs\n- Wait for upstream jobs to complete before transitioning parent to pending\n- Add waiting_upstream state with automatic transition logic\n- Cancel child jobs when parent is cancelled\n\nAdvanced Observability (Increment 6):\n- Add 8 new metrics: throughput, SLA tracking, tenant-aware metrics\n- Add sla_deadline_at and priority fields for SLA compliance tracking\n- Create Grafana dashboard (backfill-operations.json) with 17 panels\n- Add 5 new alert rules: SLA breach, SLA at risk, throughput degraded,\n  tenant failure rate, high claim latency\n- Add CLI flags: --sla-deadline (ISO 8601) and --priority (-10 to 10)\n- Create comprehensive runbooks for SLA breach, risk, and throughput issues\n- Add ADR documenting partition runtime support limitations\n\nDatabase Migrations:\n- 010: Add upstream propagation columns and indexes\n- 011: Add SLA tracking columns with partial indexes\n\n* style: apply cargo fmt formatting\n\n* chore: remove temporary planning file\n\n* fix: resolve clippy warnings for CI\n\n* fix: remove invalid subquery from migration 008 index\n\n* fix: add sla_deadline_at and priority to all SELECT queries\n\n* fix: properly claim jobs and partitions in integration tests\n\n- Add assertions to verify job claims succeed and return 'running' state\n- Fix test_resume_picks_up_from_checkpoint to claim partitions before\n  completing them (complete_backfill_partition requires 'running' state)\n\n* fix: preserve checkpoint during pause and fix test execution_id\n\n- pause_backfill_job now uses COALESCE to preserve existing checkpoint\n  when no completed partitions are found in the partitions table\n- Update test_resume_picks_up_from_checkpoint to pass None for\n  execution_id since test doesn't create actual executions\n- Add TEST_DATABASE_URL to CI runtime integration tests\n- Use --test-threads=1 to avoid migration race conditions\n\n* fix: correct dependency parameter order in upstream propagation tests\n\nThe create_dependency test helper was passing parameters to\ncreate_asset_dependency in the wrong order, causing dependencies\nto be created in the opposite direction. This resulted in\ndiscover_upstream_assets returning 0 results.\n\n* feat(cli): add TOML config file support\n\n- Add layered config loading: defaults → file → env vars\n- Config search: SERVO_CONFIG → ./servo.toml → ~/.config/servo/\n- Validate cloud_provider (gcp, aws, local)\n- Add servo.toml.example with security notes\n- Update CI for test isolation (env var manipulation)\n\n* style: apply rustfmt formatting\n\n* feat(scheduler): add Cloud Scheduler integration with production hardening\n\nCloud Scheduler Integration:\n- Add CloudSchedulerManager for GCP Cloud Scheduler API operations\n- Implement create/update/delete/pause/resume job lifecycle\n- Add scheduler endpoint POST /api/v1/workflows/:workflow_id/execute\n- Add OIDC token validation for scheduler callbacks\n- Store scheduler_job_name in workflow record on successful sync\n\nProduction Hardening:\n- Add explicit tenant validation before scheduled execution\n- Verify schedule_enabled before running scheduled workflows\n- Prevent config drift by disabling schedule when GCP sync fails\n- Detect and handle schedule removal (delete job, clear metadata)\n- Add cron expression validation using cron crate\n- Add timezone validation using chrono-tz crate\n\nDatabase Changes:\n- Migration 014: Add workflow schedule columns (cron, timezone, enabled,\n  scheduler_job_name, last_scheduled_run, next_scheduled_run)\n\nTesting:\n- Add scheduler payload contract tests\n- Add scheduler endpoint contract tests\n- Add scheduler OIDC contract tests\n- 48 contract tests passing\n\n* fix: suppress dead_code warning for test helper function\n\nAdd #[allow(dead_code)] to create_test_graph helper in queries.rs tests.\n\n* fix: allow field_reassign_with_default in local executor tests\n\nTest code commonly uses Default::default() followed by field assignments\nwhen also needing to insert into HashMap fields. This lint is too strict\nfor test code patterns.\n\n* fix: skip Python tests when Python is not available in CI\n\nAdd is_python_available() check to all Python execution tests.\nThese tests require Python to be installed, which may not be available\nin all CI environments. Tests now gracefully skip if Python is missing.\n\n* fix: skip Python tests when fixtures directory not found\n\nUpdate can_run_python_tests() to also verify the fixtures directory\nexists at servo-runtime/tests/fixtures, not just that Python is\navailable. This prevents test failures in CI environments where\nPython is installed but the working directory doesn't contain the\nfixtures.\n\n* fix: remove unnecessary let binding in can_run_python_tests\n\n* fix: change doc examples from rust,ignore to text\n\nThe --ignored flag in 'cargo test --doc -- --ignored' forces\nrust,ignore code blocks to compile. Change to text blocks\nto prevent this, since these are illustrative examples that\nreference variables not in scope.",
+          "timestamp": "2025-12-02T10:36:54-05:00",
+          "tree_id": "540328b3a94c850b4b35f1127e74e9db8e52bdfd",
+          "url": "https://github.com/ethan-tyler/servo-io/commit/8c7134db8a951ed00ec6b3e91d61925abb82a3f1"
+        },
+        "date": 1764690565834,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "graph_construction/chain/10",
+            "value": 6247,
+            "range": "± 66",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "graph_construction/fan_out/10",
+            "value": 6898,
+            "range": "± 201",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "graph_construction/chain/100",
+            "value": 66727,
+            "range": "± 934",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "graph_construction/fan_out/100",
+            "value": 67580,
+            "range": "± 761",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "graph_construction/chain/1000",
+            "value": 660071,
+            "range": "± 11245",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "graph_construction/fan_out/1000",
+            "value": 660857,
+            "range": "± 5476",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "upstream_queries/chain_last_node/10",
+            "value": 44,
+            "range": "± 2",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "upstream_queries/chain_mid_node/10",
+            "value": 45,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "upstream_queries/chain_last_node/100",
+            "value": 44,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "upstream_queries/chain_mid_node/100",
+            "value": 45,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "upstream_queries/chain_last_node/500",
+            "value": 45,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "upstream_queries/chain_mid_node/500",
+            "value": 44,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "upstream_queries/single_upstream/10",
+            "value": 44,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "upstream_queries/single_upstream/100",
+            "value": 45,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "upstream_queries/single_upstream/500",
+            "value": 44,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "downstream_queries/fan_out/10",
+            "value": 118,
+            "range": "± 3",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "downstream_queries/fan_out/100",
+            "value": 468,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "downstream_queries/fan_out/500",
+            "value": 1821,
+            "range": "± 20",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "downstream_queries/chain_first/10",
+            "value": 43,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "downstream_queries/chain_first/100",
+            "value": 43,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "downstream_queries/chain_first/500",
+            "value": 43,
+            "range": "± 1",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "cycle_detection/chain_no_cycle/10",
+            "value": 142,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "cycle_detection/chain_no_cycle/100",
+            "value": 1240,
+            "range": "± 12",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "cycle_detection/chain_no_cycle/500",
+            "value": 6559,
+            "range": "± 161",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "cycle_detection/chain_no_cycle/1000",
+            "value": 13399,
+            "range": "± 299",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "cycle_detection/diamond_layers/3",
+            "value": 452,
+            "range": "± 2",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "cycle_detection/diamond_layers/5",
+            "value": 1025,
+            "range": "± 5",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "cycle_detection/diamond_layers/7",
+            "value": 1618,
+            "range": "± 16",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "impact_analysis/fan_out_source/10",
+            "value": 127,
+            "range": "± 3",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "impact_analysis/fan_out_source/100",
+            "value": 500,
+            "range": "± 4",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "impact_analysis/fan_out_source/500",
+            "value": 1822,
+            "range": "± 116",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "impact_analysis/chain_first/10",
+            "value": 54,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "impact_analysis/chain_first/100",
+            "value": 54,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "impact_analysis/chain_first/500",
+            "value": 54,
+            "range": "± 2",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "impact_analysis/diamond_source/3",
+            "value": 127,
+            "range": "± 3",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "impact_analysis/diamond_source/5",
+            "value": 125,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "impact_analysis/diamond_source/7",
+            "value": 147,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "graph_operations/add_single_node",
+            "value": 539,
             "range": "± 1",
             "unit": "ns/iter"
           },
