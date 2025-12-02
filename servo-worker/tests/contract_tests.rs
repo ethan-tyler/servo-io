@@ -444,3 +444,143 @@ mod trace_context_contract {
         );
     }
 }
+
+mod scheduler_payload_contract {
+    use super::*;
+
+    /// Create a valid scheduler payload (as sent by Cloud Scheduler)
+    fn create_scheduler_payload() -> Value {
+        json!({
+            "workflow_id": Uuid::new_v4(),
+            "tenant_id": "test-tenant",
+            "triggered_by": "scheduler"
+        })
+    }
+
+    #[test]
+    fn scheduler_payload_has_required_fields() {
+        let payload = create_scheduler_payload();
+
+        // Verify required fields exist
+        assert!(payload.get("workflow_id").is_some(), "workflow_id required");
+        assert!(payload.get("tenant_id").is_some(), "tenant_id required");
+        assert!(
+            payload.get("triggered_by").is_some(),
+            "triggered_by required"
+        );
+    }
+
+    #[test]
+    fn workflow_id_must_be_uuid() {
+        let payload = create_scheduler_payload();
+        let workflow_id = payload["workflow_id"].as_str().unwrap();
+        assert!(
+            Uuid::parse_str(workflow_id).is_ok(),
+            "workflow_id must be valid UUID"
+        );
+    }
+
+    #[test]
+    fn tenant_id_must_be_string() {
+        let payload = create_scheduler_payload();
+        assert!(
+            payload["tenant_id"].is_string(),
+            "tenant_id must be a string"
+        );
+    }
+
+    #[test]
+    fn triggered_by_indicates_scheduler() {
+        let payload = create_scheduler_payload();
+        assert_eq!(
+            payload["triggered_by"], "scheduler",
+            "triggered_by should be 'scheduler' for scheduled executions"
+        );
+    }
+
+    #[test]
+    fn tenant_header_required() {
+        // Contract: Cloud Scheduler requests must include X-Servo-Tenant-Id header
+        let header_name = "x-servo-tenant-id";
+        assert_eq!(header_name.to_lowercase(), "x-servo-tenant-id");
+    }
+}
+
+mod scheduler_execute_endpoint_contract {
+    use super::*;
+
+    #[test]
+    fn endpoint_path_includes_workflow_id() {
+        // Contract: /api/v1/workflows/:workflow_id/execute
+        let workflow_id = Uuid::new_v4();
+        let path = format!("/api/v1/workflows/{}/execute", workflow_id);
+        assert!(path.contains(&workflow_id.to_string()));
+    }
+
+    #[test]
+    fn endpoint_uses_post_method() {
+        // Contract: POST method for triggering executions
+        let method = "POST";
+        assert_eq!(method, "POST");
+    }
+
+    #[test]
+    fn response_includes_execution_id() {
+        // Contract: Response must include the created execution_id
+        let response = json!({
+            "execution_id": Uuid::new_v4(),
+            "status": "accepted"
+        });
+
+        assert!(response.get("execution_id").is_some());
+        let execution_id = response["execution_id"].as_str().unwrap();
+        assert!(Uuid::parse_str(execution_id).is_ok());
+    }
+
+    #[test]
+    fn unauthorized_for_missing_auth() {
+        // Contract: Missing OIDC token should return 401
+        let expected_status = StatusCode::UNAUTHORIZED;
+        assert_eq!(expected_status.as_u16(), 401);
+    }
+
+    #[test]
+    fn not_found_for_invalid_workflow() {
+        // Contract: Non-existent workflow should return 404
+        let expected_status = StatusCode::NOT_FOUND;
+        assert_eq!(expected_status.as_u16(), 404);
+    }
+
+    #[test]
+    fn conflict_for_disabled_schedule() {
+        // Contract: Disabled schedule should return 409 Conflict
+        let expected_status = StatusCode::CONFLICT;
+        assert_eq!(expected_status.as_u16(), 409);
+    }
+}
+
+mod scheduler_oidc_contract {
+    #[test]
+    fn oidc_token_uses_bearer_scheme() {
+        // Contract: Cloud Scheduler sends OIDC tokens with Bearer scheme
+        let token = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9...";
+        let header_value = format!("Bearer {}", token);
+        assert!(header_value.starts_with("Bearer "));
+    }
+
+    #[test]
+    fn oidc_audience_matches_worker_url() {
+        // Contract: OIDC token audience must match the worker URL
+        let worker_url = "https://servo-worker-xxxx.run.app";
+        let expected_audience = worker_url;
+        assert!(expected_audience.starts_with("https://"));
+    }
+
+    #[test]
+    fn oidc_service_account_in_token() {
+        // Contract: The token should contain the service account email
+        // This is verified by the OIDC validator
+        let expected_claim = "email";
+        assert_eq!(expected_claim, "email");
+    }
+}

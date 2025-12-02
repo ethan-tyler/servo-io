@@ -247,8 +247,9 @@ impl PostgresStorage {
                 sqlx::query(
                     r#"
                     INSERT INTO assets (
-                        id, name, description, asset_type, owner, tags, tenant_id, created_at, updated_at
-                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                        id, name, description, asset_type, owner, tags, partition_config,
+                        compute_fn_module, compute_fn_function, tenant_id, created_at, updated_at
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
                     "#,
                 )
                 .bind(asset.id)
@@ -257,6 +258,9 @@ impl PostgresStorage {
                 .bind(&asset.asset_type)
                 .bind(&asset.owner)
                 .bind(&asset.tags)
+                .bind(&asset.partition_config)
+                .bind(&asset.compute_fn_module)
+                .bind(&asset.compute_fn_function)
                 .bind(&tenant_str)
                 .bind(asset.created_at)
                 .bind(asset.updated_at)
@@ -294,6 +298,9 @@ impl PostgresStorage {
                            asset_type,
                            owner,
                            tags,
+                           partition_config,
+                           compute_fn_module,
+                           compute_fn_function,
                            tenant_id,
                            created_at,
                            updated_at
@@ -308,6 +315,49 @@ impl PostgresStorage {
                 .ok_or_else(|| crate::Error::NotFound(format!("Asset {}", id)))?;
 
                 Ok(asset)
+            })
+        })
+        .await
+    }
+
+    /// Get an asset's partition configuration by ID
+    ///
+    /// Returns `Ok(None)` if the asset exists but has no partition config.
+    /// Returns `Err(NotFound)` if the asset doesn't exist.
+    /// This is more efficient than get_asset when only the partition config is needed.
+    #[instrument(
+        skip(self, tenant_id),
+        fields(
+            db.system = "postgresql",
+            db.operation = "SELECT",
+            db.sql.table = "assets",
+            tenant_id = %tenant_id.as_str(),
+            asset_id = %asset_id
+        )
+    )]
+    pub async fn get_asset_partition_config(
+        &self,
+        asset_id: Uuid,
+        tenant_id: &TenantId,
+    ) -> Result<Option<serde_json::Value>> {
+        self.with_tenant_context(tenant_id, |tx| {
+            Box::pin(async move {
+                let row: Option<(Option<sqlx::types::Json<serde_json::Value>>,)> = sqlx::query_as(
+                    r#"
+                        SELECT partition_config
+                        FROM assets
+                        WHERE id = $1
+                        "#,
+                )
+                .bind(asset_id)
+                .fetch_optional(&mut **tx)
+                .await
+                .map_err(map_db_error)?;
+
+                match row {
+                    Some((config,)) => Ok(config.map(|c| c.0)),
+                    None => Err(crate::Error::NotFound(format!("Asset {}", asset_id))),
+                }
             })
         })
         .await
@@ -341,8 +391,11 @@ impl PostgresStorage {
                 sqlx::query(
                     r#"
                     INSERT INTO workflows (
-                        id, name, description, owner, tags, tenant_id, version, created_at, updated_at
-                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                        id, name, description, owner, tags, tenant_id, version,
+                        schedule_cron, schedule_timezone, schedule_enabled,
+                        scheduler_job_name, last_scheduled_run, next_scheduled_run,
+                        created_at, updated_at
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
                     "#,
                 )
                 .bind(workflow.id)
@@ -352,6 +405,12 @@ impl PostgresStorage {
                 .bind(&workflow.tags)
                 .bind(&tenant_str)
                 .bind(workflow.version)
+                .bind(&workflow.schedule_cron)
+                .bind(&workflow.schedule_timezone)
+                .bind(workflow.schedule_enabled)
+                .bind(&workflow.scheduler_job_name)
+                .bind(workflow.last_scheduled_run)
+                .bind(workflow.next_scheduled_run)
                 .bind(workflow.created_at)
                 .bind(workflow.updated_at)
                 .execute(&mut **tx)
@@ -540,7 +599,10 @@ impl PostgresStorage {
                         asset_type = $4,
                         owner = $5,
                         tags = $6,
-                        updated_at = $7
+                        partition_config = $7,
+                        compute_fn_module = $8,
+                        compute_fn_function = $9,
+                        updated_at = $10
                     WHERE id = $1
                     "#,
                 )
@@ -550,6 +612,9 @@ impl PostgresStorage {
                 .bind(&asset.asset_type)
                 .bind(&asset.owner)
                 .bind(&asset.tags)
+                .bind(&asset.partition_config)
+                .bind(&asset.compute_fn_module)
+                .bind(&asset.compute_fn_function)
                 .bind(asset.updated_at)
                 .execute(&mut **tx)
                 .await
@@ -597,7 +662,13 @@ impl PostgresStorage {
                         owner = $4,
                         tags = $5,
                         version = $6,
-                        updated_at = $7
+                        schedule_cron = $7,
+                        schedule_timezone = $8,
+                        schedule_enabled = $9,
+                        scheduler_job_name = $10,
+                        last_scheduled_run = $11,
+                        next_scheduled_run = $12,
+                        updated_at = $13
                     WHERE id = $1
                     "#,
                 )
@@ -607,6 +678,12 @@ impl PostgresStorage {
                 .bind(&workflow.owner)
                 .bind(&workflow.tags)
                 .bind(workflow.version)
+                .bind(&workflow.schedule_cron)
+                .bind(&workflow.schedule_timezone)
+                .bind(workflow.schedule_enabled)
+                .bind(&workflow.scheduler_job_name)
+                .bind(workflow.last_scheduled_run)
+                .bind(workflow.next_scheduled_run)
                 .bind(workflow.updated_at)
                 .execute(&mut **tx)
                 .await
@@ -777,7 +854,8 @@ impl PostgresStorage {
             Box::pin(async move {
                 let assets = sqlx::query_as::<_, AssetModel>(
                     r#"
-                    SELECT id, name, description, asset_type, owner, tags, tenant_id, created_at, updated_at
+                    SELECT id, name, description, asset_type, owner, tags, partition_config,
+                           compute_fn_module, compute_fn_function, tenant_id, created_at, updated_at
                     FROM assets
                     ORDER BY created_at DESC, id DESC
                     LIMIT $1 OFFSET $2
@@ -795,6 +873,70 @@ impl PostgresStorage {
         .await
     }
 
+    /// Get assets for a workflow in execution order
+    ///
+    /// Returns assets ordered by their position in the workflow_assets join table,
+    /// which represents the topologically sorted execution order.
+    ///
+    /// This operation enforces tenant isolation via RLS policies.
+    #[instrument(skip(self, tenant_id), fields(tenant = %tenant_id.as_str(), workflow_id = %workflow_id))]
+    pub async fn get_workflow_assets(
+        &self,
+        workflow_id: Uuid,
+        tenant_id: &TenantId,
+    ) -> Result<Vec<AssetModel>> {
+        self.with_tenant_context(tenant_id, |tx| {
+            Box::pin(async move {
+                let assets = sqlx::query_as::<_, AssetModel>(
+                    r#"
+                    SELECT a.id, a.name, a.description, a.asset_type, a.owner, a.tags,
+                           a.partition_config, a.compute_fn_module, a.compute_fn_function,
+                           a.tenant_id, a.created_at, a.updated_at
+                    FROM assets a
+                    INNER JOIN workflow_assets wa ON wa.asset_id = a.id
+                    WHERE wa.workflow_id = $1
+                    ORDER BY wa.position ASC
+                    "#,
+                )
+                .bind(workflow_id)
+                .fetch_all(&mut **tx)
+                .await
+                .map_err(map_db_error)?;
+
+                Ok(assets)
+            })
+        })
+        .await
+    }
+
+    /// Get an asset by name
+    ///
+    /// This operation enforces tenant isolation via RLS policies.
+    #[instrument(skip(self, tenant_id), fields(tenant = %tenant_id.as_str(), asset_name = %name))]
+    pub async fn get_asset_by_name(&self, name: &str, tenant_id: &TenantId) -> Result<AssetModel> {
+        self.with_tenant_context(tenant_id, |tx| {
+            let name = name.to_string();
+            Box::pin(async move {
+                let asset = sqlx::query_as::<_, AssetModel>(
+                    r#"
+                    SELECT id, name, description, asset_type, owner, tags, partition_config,
+                           compute_fn_module, compute_fn_function, tenant_id, created_at, updated_at
+                    FROM assets
+                    WHERE name = $1
+                    "#,
+                )
+                .bind(&name)
+                .fetch_optional(&mut **tx)
+                .await
+                .map_err(map_db_error)?
+                .ok_or_else(|| crate::Error::NotFound(format!("Asset '{}'", name)))?;
+
+                Ok(asset)
+            })
+        })
+        .await
+    }
+
     /// Get workflow by ID
     ///
     /// This operation enforces tenant isolation via RLS policies.
@@ -803,7 +945,10 @@ impl PostgresStorage {
             Box::pin(async move {
                 let workflow = sqlx::query_as::<_, WorkflowModel>(
                     r#"
-                    SELECT id, name, description, owner, tags, tenant_id, version, created_at, updated_at
+                    SELECT id, name, description, owner, tags, tenant_id, version,
+                           schedule_cron, schedule_timezone, schedule_enabled,
+                           scheduler_job_name, last_scheduled_run, next_scheduled_run,
+                           created_at, updated_at
                     FROM workflows
                     WHERE id = $1
                     "#,
@@ -836,7 +981,10 @@ impl PostgresStorage {
             Box::pin(async move {
                 let workflows = sqlx::query_as::<_, WorkflowModel>(
                     r#"
-                    SELECT id, name, description, owner, tags, tenant_id, version, created_at, updated_at
+                    SELECT id, name, description, owner, tags, tenant_id, version,
+                           schedule_cron, schedule_timezone, schedule_enabled,
+                           scheduler_job_name, last_scheduled_run, next_scheduled_run,
+                           created_at, updated_at
                     FROM workflows
                     ORDER BY created_at DESC, id DESC
                     LIMIT $1 OFFSET $2
@@ -4313,6 +4461,9 @@ mod tests {
             asset_type: "table".to_string(),
             owner: Some("test_user".to_string()),
             tags: Json(vec!["tag1".to_string(), "tag2".to_string()]),
+            partition_config: None,
+            compute_fn_module: None,
+            compute_fn_function: None,
             tenant_id: Some(tenant.as_str().to_string()),
             created_at: Utc::now(),
             updated_at: Utc::now(),
@@ -4350,6 +4501,9 @@ mod tests {
             asset_type: "table".to_string(),
             owner: Some("test_user".to_string()),
             tags: Json(vec![]),
+            partition_config: None,
+            compute_fn_module: None,
+            compute_fn_function: None,
             tenant_id: Some(tenant.as_str().to_string()),
             created_at: Utc::now(),
             updated_at: Utc::now(),
@@ -4395,6 +4549,9 @@ mod tests {
             asset_type: "table".to_string(),
             owner: None,
             tags: Json(vec![]),
+            partition_config: None,
+            compute_fn_module: None,
+            compute_fn_function: None,
             tenant_id: Some(tenant.as_str().to_string()),
             created_at: Utc::now(),
             updated_at: Utc::now(),
@@ -4433,6 +4590,9 @@ mod tests {
                 asset_type: "table".to_string(),
                 owner: None,
                 tags: Json(vec![]),
+                partition_config: None,
+                compute_fn_module: None,
+                compute_fn_function: None,
                 tenant_id: Some(tenant.as_str().to_string()),
                 created_at: Utc::now(),
                 updated_at: Utc::now(),
@@ -4484,6 +4644,9 @@ mod tests {
             asset_type: "table".to_string(),
             owner: None,
             tags: Json(vec![]),
+            partition_config: None,
+            compute_fn_module: None,
+            compute_fn_function: None,
             tenant_id: Some(tenant1.as_str().to_string()),
             created_at: Utc::now(),
             updated_at: Utc::now(),
@@ -4502,6 +4665,9 @@ mod tests {
             asset_type: "table".to_string(),
             owner: None,
             tags: Json(vec![]),
+            partition_config: None,
+            compute_fn_module: None,
+            compute_fn_function: None,
             tenant_id: Some(tenant2.as_str().to_string()),
             created_at: Utc::now(),
             updated_at: Utc::now(),
@@ -4551,6 +4717,9 @@ mod tests {
             asset_type: "table".to_string(),
             owner: None,
             tags: Json(vec![]),
+            partition_config: None,
+            compute_fn_module: None,
+            compute_fn_function: None,
             tenant_id: Some(tenant.as_str().to_string()),
             created_at: Utc::now(),
             updated_at: Utc::now(),
@@ -4569,6 +4738,9 @@ mod tests {
             asset_type: "table".to_string(),
             owner: None,
             tags: Json(vec![]),
+            partition_config: None,
+            compute_fn_module: None,
+            compute_fn_function: None,
             tenant_id: Some(tenant.as_str().to_string()),
             created_at: Utc::now(),
             updated_at: Utc::now(),
@@ -4623,6 +4795,9 @@ mod tests {
             asset_type: "table".to_string(),
             owner: None,
             tags: Json(vec![]),
+            partition_config: None,
+            compute_fn_module: None,
+            compute_fn_function: None,
             tenant_id: Some(tenant.as_str().to_string()),
             created_at: Utc::now(),
             updated_at: Utc::now(),
@@ -4635,6 +4810,9 @@ mod tests {
             asset_type: "table".to_string(),
             owner: None,
             tags: Json(vec![]),
+            partition_config: None,
+            compute_fn_module: None,
+            compute_fn_function: None,
             tenant_id: Some(tenant.as_str().to_string()),
             created_at: Utc::now(),
             updated_at: Utc::now(),
@@ -4647,6 +4825,9 @@ mod tests {
             asset_type: "table".to_string(),
             owner: None,
             tags: Json(vec![]),
+            partition_config: None,
+            compute_fn_module: None,
+            compute_fn_function: None,
             tenant_id: Some(tenant.as_str().to_string()),
             created_at: Utc::now(),
             updated_at: Utc::now(),
@@ -4690,6 +4871,12 @@ mod tests {
             tags: Json(vec!["daily".to_string()]),
             tenant_id: Some("tenant1".to_string()),
             version: 1,
+            schedule_cron: None,
+            schedule_timezone: None,
+            schedule_enabled: None,
+            scheduler_job_name: None,
+            last_scheduled_run: None,
+            next_scheduled_run: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
@@ -4734,6 +4921,12 @@ mod tests {
             tags: Json(vec![]),
             tenant_id: Some("tenant1".to_string()),
             version: 1,
+            schedule_cron: None,
+            schedule_timezone: None,
+            schedule_enabled: None,
+            scheduler_job_name: None,
+            last_scheduled_run: None,
+            next_scheduled_run: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
@@ -4795,6 +4988,9 @@ mod tests {
             asset_type: "table".to_string(),
             owner: Some("tenant1_owner".to_string()),
             tags: Json(vec!["private".to_string()]),
+            partition_config: None,
+            compute_fn_module: None,
+            compute_fn_function: None,
             tenant_id: Some("tenant1".to_string()),
             created_at: Utc::now(),
             updated_at: Utc::now(),
@@ -4813,6 +5009,9 @@ mod tests {
             asset_type: "table".to_string(),
             owner: Some("tenant2_owner".to_string()),
             tags: Json(vec!["private".to_string()]),
+            partition_config: None,
+            compute_fn_module: None,
+            compute_fn_function: None,
             tenant_id: Some("tenant2".to_string()),
             created_at: Utc::now(),
             updated_at: Utc::now(),

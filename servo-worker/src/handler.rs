@@ -8,10 +8,10 @@ use crate::executor::WorkflowExecutor;
 use crate::rate_limiter::{self, RateLimitError};
 use crate::secrets_provider::SecretsProvider;
 use crate::security::{extract_signature, verify_signature};
-use crate::types::{ExecuteResponse, HealthResponse, TaskPayload};
+use crate::types::{ExecuteResponse, HealthResponse, SchedulerPayload, TaskPayload};
 use axum::{
     body::Bytes,
-    extract::State,
+    extract::{Path, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     Json,
@@ -196,6 +196,172 @@ pub async fn execute_handler(
 
     // Return immediate response
     Ok(Json(ExecuteResponse::accepted(execution_id)))
+}
+
+/// Execute a workflow triggered by Cloud Scheduler
+///
+/// This endpoint:
+/// 1. Verifies OIDC token (no HMAC signature - Scheduler uses OIDC only)
+/// 2. Creates an execution record
+/// 3. Spawns background task for execution
+///
+/// # Path Parameters
+///
+/// * `workflow_id` - UUID of the workflow to execute
+///
+/// # Request Format
+///
+/// - Header: `Authorization: Bearer <oidc-token>`
+/// - Header: `X-Servo-Tenant-Id: <tenant-id>`
+/// - Body: JSON payload with `workflow_id`, `tenant_id`, `triggered_by`
+///
+/// # Response
+///
+/// Returns 200 OK with execution_id after spawning execution task.
+pub async fn scheduler_execute_handler(
+    State(state): State<AppState>,
+    Path(workflow_id): Path<uuid::Uuid>,
+    headers: HeaderMap,
+    Json(payload): Json<SchedulerPayload>,
+) -> Result<Json<ExecuteResponse>, SchedulerExecuteError> {
+    // OIDC validation (caller identity) - REQUIRED for Cloud Scheduler
+    if state.oidc_validator.config().enabled {
+        let auth_header = headers
+            .get("authorization")
+            .and_then(|v| v.to_str().ok())
+            .ok_or(SchedulerExecuteError::MissingOidcToken)?;
+
+        let token = auth_header
+            .strip_prefix("Bearer ")
+            .ok_or(SchedulerExecuteError::InvalidOidcToken)?;
+
+        state
+            .oidc_validator
+            .validate_token(token)
+            .await
+            .map_err(|e| {
+                warn!(error = %e, "OIDC token validation failed for scheduler request");
+                SchedulerExecuteError::InvalidOidcToken
+            })?;
+
+        info!("OIDC token validated successfully for scheduler request");
+    }
+
+    // Validate payload workflow_id matches path
+    if payload.workflow_id != workflow_id {
+        warn!(
+            path_workflow_id = %workflow_id,
+            payload_workflow_id = %payload.workflow_id,
+            "Workflow ID mismatch between path and payload"
+        );
+        return Err(SchedulerExecuteError::WorkflowIdMismatch);
+    }
+
+    let tenant_id = &payload.tenant_id;
+
+    info!(
+        workflow_id = %workflow_id,
+        tenant_id = %tenant_id,
+        triggered_by = %payload.triggered_by,
+        "Received scheduler execution request"
+    );
+
+    // Per-tenant rate limiting (after auth, before expensive work)
+    if let Err(rate_limit_error) = state.tenant_rate_limiter.check_tenant(tenant_id) {
+        warn!(
+            tenant_id = %tenant_id,
+            workflow_id = %workflow_id,
+            error = %rate_limit_error,
+            "Tenant rate limit exceeded for scheduler request"
+        );
+        return Err(SchedulerExecuteError::RateLimitExceeded(rate_limit_error));
+    }
+
+    // Clone executor for background task
+    let executor = state.executor.clone();
+    let tenant_id_clone = tenant_id.clone();
+
+    // Spawn background task for execution
+    tokio::spawn(async move {
+        match executor
+            .execute_scheduled(workflow_id, &tenant_id_clone)
+            .await
+        {
+            Ok(execution_id) => {
+                info!(
+                    execution_id = %execution_id,
+                    workflow_id = %workflow_id,
+                    "Scheduled workflow execution completed successfully"
+                );
+            }
+            Err(e) => {
+                error!(
+                    workflow_id = %workflow_id,
+                    error = %e,
+                    "Scheduled workflow execution failed"
+                );
+            }
+        }
+    });
+
+    // Return immediate response with a placeholder execution ID
+    // The actual execution_id is created in the background task
+    Ok(Json(ExecuteResponse {
+        execution_id: workflow_id, // Use workflow_id as placeholder
+        status: "accepted".to_string(),
+        message: Some("Scheduled execution started".to_string()),
+    }))
+}
+
+/// Error types for scheduler execute handler
+#[derive(Debug)]
+pub enum SchedulerExecuteError {
+    MissingOidcToken,
+    InvalidOidcToken,
+    WorkflowIdMismatch,
+    RateLimitExceeded(RateLimitError),
+}
+
+impl IntoResponse for SchedulerExecuteError {
+    fn into_response(self) -> Response {
+        let (status, message, retry_after) = match self {
+            SchedulerExecuteError::MissingOidcToken => (
+                StatusCode::UNAUTHORIZED,
+                "Missing OIDC token".to_string(),
+                None,
+            ),
+            SchedulerExecuteError::InvalidOidcToken => (
+                StatusCode::UNAUTHORIZED,
+                "Invalid OIDC token".to_string(),
+                None,
+            ),
+            SchedulerExecuteError::WorkflowIdMismatch => (
+                StatusCode::BAD_REQUEST,
+                "Workflow ID in path does not match payload".to_string(),
+                None,
+            ),
+            SchedulerExecuteError::RateLimitExceeded(ref err) => {
+                let retry_after_secs = match err {
+                    RateLimitError::TenantLimitExceeded { .. } => 1,
+                    RateLimitError::IpLimitExceeded { .. } => 60,
+                };
+                (
+                    StatusCode::TOO_MANY_REQUESTS,
+                    format!("Rate limit exceeded: {}", err),
+                    Some(retry_after_secs),
+                )
+            }
+        };
+
+        let mut response = (status, message).into_response();
+        if let Some(retry_secs) = retry_after {
+            response.headers_mut().insert(
+                axum::http::header::RETRY_AFTER,
+                axum::http::HeaderValue::from_str(&retry_secs.to_string()).unwrap(),
+            );
+        }
+        response
+    }
 }
 
 /// Health check endpoint (liveness probe)

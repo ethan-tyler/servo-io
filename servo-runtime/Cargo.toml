@@ -39,6 +39,10 @@ rand = "0.8"
 prometheus = { version = "0.13", features = ["process"] }
 lazy_static = "1.4"
 
+# Security/validation
+regex = "1.10"
+once_cell = "1.19"
+
 # Internal dependencies
 servo-core = { path = "../servo-core" }
 servo-storage = { path = "../servo-storage" }

@@ -5,6 +5,8 @@
 
 pub mod asset;
 pub mod compiler;
+pub mod partition_mapping;
+pub mod partition_validator;
 pub mod quality;
 pub mod registry;
 pub mod scheduler;
@@ -16,6 +18,10 @@ pub use asset::{
     PartitionType, TimeGranularity,
 };
 pub use compiler::{CompileError, ExecutionPlan, WorkflowCompiler};
+pub use partition_mapping::{
+    infer_mapping, PartitionMapper, PartitionMapping, PartitionMappingError,
+};
+pub use partition_validator::{PartitionConfigExt, PartitionValidator, ValidationError};
 pub use quality::{
     AssetCheck, AssetCheckBuilder, CheckExecutionSummary, CheckId, CheckOutcome, CheckResult,
     CheckSeverity, CheckType,

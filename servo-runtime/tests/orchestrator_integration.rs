@@ -70,6 +70,12 @@ async fn create_test_workflow(storage: &PostgresStorage, tenant: &TenantId) -> U
         tags: sqlx::types::Json(vec![]),
         tenant_id: Some(tenant.as_str().to_string()),
         version: 1,
+        schedule_cron: None,
+        schedule_timezone: None,
+        schedule_enabled: None,
+        scheduler_job_name: None,
+        last_scheduled_run: None,
+        next_scheduled_run: None,
         created_at: chrono::Utc::now(),
         updated_at: chrono::Utc::now(),
     };

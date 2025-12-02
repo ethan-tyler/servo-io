@@ -30,7 +30,10 @@ use servo_worker::{
     config,
     environment::RuntimeEnvironment,
     executor,
-    handler::{execute_handler, health_handler, metrics_handler, ready_handler, AppState},
+    handler::{
+        execute_handler, health_handler, metrics_handler, ready_handler, scheduler_execute_handler,
+        AppState,
+    },
     metrics, oidc,
     secrets_provider::SecretsProvider,
     tracing_config::{self, TracingConfig},
@@ -160,6 +163,11 @@ async fn main() {
     // Build router with security hardening
     let app = Router::new()
         .route("/execute", post(execute_handler))
+        // Cloud Scheduler endpoint for scheduled workflow execution
+        .route(
+            "/api/v1/workflows/:workflow_id/execute",
+            post(scheduler_execute_handler),
+        )
         .route("/health", get(health_handler))
         .route("/ready", get(ready_handler))
         .route("/metrics", get(metrics_handler))

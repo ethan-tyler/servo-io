@@ -326,6 +326,57 @@ lazy_static! {
     .expect("servo_backfill_jobs_active_by_tenant metric registration");
 
     // =========================================================================
+    // PYTHON EXECUTION METRICS (LocalExecutor)
+    // =========================================================================
+
+    /// Duration of Python asset execution in seconds
+    ///
+    /// Labels:
+    /// - status: "success", "failure", "timeout"
+    ///
+    /// Buckets: 0.1s to 300s (5 minutes) for typical data processing functions
+    pub static ref PYTHON_EXECUTION_DURATION_SECONDS: HistogramVec = register_histogram_vec!(
+        "servo_python_execution_duration_seconds",
+        "Duration of Python asset execution",
+        &["status"],
+        vec![0.1, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 120.0, 300.0]
+    )
+    .expect("servo_python_execution_duration_seconds metric registration");
+
+    /// Total number of Python asset executions
+    ///
+    /// Labels:
+    /// - tenant_id: Tenant identifier for multi-tenant filtering
+    /// - status: "success", "failure", "timeout"
+    pub static ref PYTHON_EXECUTION_TOTAL: IntCounterVec = register_int_counter_vec!(
+        "servo_python_execution_total",
+        "Total number of Python asset executions",
+        &["tenant_id", "status"]
+    )
+    .expect("servo_python_execution_total metric registration");
+
+    /// Total number of Python execution errors by type
+    ///
+    /// Labels:
+    /// - error_type: "timeout", "import_error", "runtime_error", "validation_error", "spawn_error"
+    pub static ref PYTHON_EXECUTION_ERRORS_TOTAL: IntCounterVec = register_int_counter_vec!(
+        "servo_python_execution_errors_total",
+        "Total number of Python execution errors by type",
+        &["error_type"]
+    )
+    .expect("servo_python_execution_errors_total metric registration");
+
+    /// Number of currently running Python executions
+    ///
+    /// Use for concurrency monitoring and capacity planning
+    pub static ref PYTHON_EXECUTIONS_IN_FLIGHT: IntGaugeVec = register_int_gauge_vec!(
+        "servo_python_executions_in_flight",
+        "Number of Python executions currently running",
+        &["tenant_id"]
+    )
+    .expect("servo_python_executions_in_flight metric registration");
+
+    // =========================================================================
     // DEPRECATED: HIGH-CARDINALITY METRICS (Use aggregates above instead)
     // These metrics use job_id labels which can cause Prometheus memory issues
     // at scale. They are kept for backward compatibility during migration.
@@ -416,5 +467,11 @@ mod tests {
 
         // Tenant-aware metrics
         let _ = BACKFILL_JOBS_ACTIVE_BY_TENANT.with_label_values(&["test-tenant", "running"]);
+
+        // Python execution metrics
+        let _ = PYTHON_EXECUTION_DURATION_SECONDS.with_label_values(&["success"]);
+        let _ = PYTHON_EXECUTION_TOTAL.with_label_values(&["test-tenant", "success"]);
+        let _ = PYTHON_EXECUTION_ERRORS_TOTAL.with_label_values(&["timeout"]);
+        let _ = PYTHON_EXECUTIONS_IN_FLIGHT.with_label_values(&["test-tenant"]);
     }
 }
