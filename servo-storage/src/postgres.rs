@@ -2684,6 +2684,55 @@ impl PostgresStorage {
         .await
     }
 
+    /// Check if a partition has been completed for an asset in any backfill job.
+    ///
+    /// This is used for partition readiness checks - before executing a partition,
+    /// we verify that upstream partitions have been completed.
+    #[instrument(
+        skip(self, tenant_id),
+        fields(
+            db.system = "postgresql",
+            db.operation = "SELECT",
+            db.sql.table = "backfill_partitions",
+            tenant_id = %tenant_id.as_str(),
+            asset_id = %asset_id,
+            partition_key = %partition_key
+        )
+    )]
+    pub async fn is_partition_completed(
+        &self,
+        asset_id: Uuid,
+        partition_key: &str,
+        tenant_id: &TenantId,
+    ) -> Result<bool> {
+        let partition_key = partition_key.to_string();
+
+        self.with_tenant_context(tenant_id, |tx| {
+            Box::pin(async move {
+                let result = sqlx::query_scalar::<_, bool>(
+                    r#"
+                    SELECT EXISTS(
+                        SELECT 1
+                        FROM backfill_partitions bp
+                        JOIN backfill_jobs bj ON bp.backfill_job_id = bj.id
+                        WHERE bj.asset_id = $1
+                          AND bp.partition_key = $2
+                          AND bp.state = 'completed'
+                    )
+                    "#,
+                )
+                .bind(asset_id)
+                .bind(&partition_key)
+                .fetch_one(&mut **tx)
+                .await
+                .map_err(map_db_error)?;
+
+                Ok(result)
+            })
+        })
+        .await
+    }
+
     /// Find backfill job by idempotency key
     #[instrument(
         skip(self, tenant_id),
@@ -3476,6 +3525,53 @@ impl PostgresStorage {
                 .bind(&error_message)
                 .bind(duration_ms)
                 .bind(now)
+                .bind(partition_id)
+                .execute(&mut **tx)
+                .await
+                .map_err(map_db_error)?;
+
+                if result.rows_affected() == 0 {
+                    return Err(crate::Error::NotFound(format!(
+                        "Backfill partition {} not found in running state",
+                        partition_id
+                    )));
+                }
+
+                Ok(())
+            })
+        })
+        .await
+    }
+
+    /// Re-queue a partition back to pending state for delayed retry.
+    ///
+    /// This is used when upstream partitions are not yet completed.
+    /// The partition will be picked up again on the next claim cycle.
+    #[instrument(
+        skip(self, tenant_id),
+        fields(
+            db.system = "postgresql",
+            db.operation = "UPDATE",
+            db.sql.table = "backfill_partitions",
+            tenant_id = %tenant_id.as_str(),
+            partition_id = %partition_id
+        )
+    )]
+    pub async fn requeue_backfill_partition(
+        &self,
+        partition_id: Uuid,
+        tenant_id: &TenantId,
+    ) -> Result<()> {
+        self.with_tenant_context(tenant_id, |tx| {
+            Box::pin(async move {
+                let result = sqlx::query(
+                    r#"
+                    UPDATE backfill_partitions
+                    SET state = 'pending',
+                        started_at = NULL
+                    WHERE id = $1 AND state = 'running'
+                    "#,
+                )
                 .bind(partition_id)
                 .execute(&mut **tx)
                 .await

@@ -35,8 +35,9 @@ use crate::metrics::{
     BACKFILL_JOB_CLAIM_LATENCY_SECONDS, BACKFILL_JOB_CLAIM_TOTAL, BACKFILL_JOB_DURATION_SECONDS,
     BACKFILL_JOB_ETA_SECONDS, BACKFILL_JOB_PROGRESS_RATIO, BACKFILL_PARTITIONS_PROCESSED_TOTAL,
     BACKFILL_PARTITION_CLAIM_TOTAL, BACKFILL_PARTITION_COMPLETION_TOTAL,
-    BACKFILL_PARTITION_DURATION, BACKFILL_UPSTREAM_DEPTH, BACKFILL_UPSTREAM_DISCOVERY_TOTAL,
-    BACKFILL_UPSTREAM_JOBS_CREATED_TOTAL, BACKFILL_UPSTREAM_PARENT_TRANSITION_TOTAL,
+    BACKFILL_PARTITION_DURATION, BACKFILL_PARTITION_REQUEUE_TOTAL, BACKFILL_UPSTREAM_DEPTH,
+    BACKFILL_UPSTREAM_DISCOVERY_TOTAL, BACKFILL_UPSTREAM_JOBS_CREATED_TOTAL,
+    BACKFILL_UPSTREAM_PARENT_TRANSITION_TOTAL,
 };
 use crate::orchestrator::ExecutionOrchestrator;
 use crate::Result;
@@ -89,6 +90,8 @@ pub struct BackfillExecutorConfig {
     pub stale_heartbeat_threshold: Duration,
     /// Timeout per partition execution (default: 5 minutes)
     pub partition_timeout: Duration,
+    /// Delay before retrying when upstream partitions not ready (default: 30 seconds)
+    pub upstream_wait_delay: Duration,
 }
 
 impl Default for BackfillExecutorConfig {
@@ -101,6 +104,7 @@ impl Default for BackfillExecutorConfig {
             partition_delay: Duration::from_millis(100),
             stale_heartbeat_threshold: Duration::from_secs(120),
             partition_timeout: Duration::from_secs(300),
+            upstream_wait_delay: Duration::from_secs(30),
         }
     }
 }
@@ -879,6 +883,7 @@ impl BackfillExecutor {
     /// Execute a single partition (already claimed and in running state)
     ///
     /// Optionally accepts an upstream dependency cache for partition mapping.
+    /// If upstream partitions are not ready, the partition is re-queued for later.
     #[instrument(skip(self, job, upstream_cache), fields(partition_key = %partition.partition_key, attempt = partition.attempt_count))]
     async fn execute_partition(
         &self,
@@ -886,6 +891,46 @@ impl BackfillExecutor {
         partition: &BackfillPartitionModel,
         upstream_cache: Option<&JobDependencyCache>,
     ) -> Result<()> {
+        // Get the asset's partition config for upstream readiness check
+        let asset = self
+            .storage
+            .get_asset(job.asset_id, &self.tenant_id)
+            .await
+            .map_err(|e| crate::Error::NotFound(format!("Asset not found: {}", e)))?;
+
+        let partition_config: Option<PartitionConfig> = asset
+            .partition_config
+            .as_ref()
+            .and_then(|j| serde_json::from_value(j.0.clone()).ok());
+
+        // Check if upstream partitions are ready
+        let upstream_ready = self
+            .check_upstream_ready(&partition.partition_key, &partition_config, upstream_cache)
+            .await?;
+
+        if !upstream_ready {
+            info!(
+                partition_key = %partition.partition_key,
+                "Upstream partitions not ready, re-queueing"
+            );
+
+            // Record requeue metric for observability
+            BACKFILL_PARTITION_REQUEUE_TOTAL
+                .with_label_values(&[self.tenant_id.as_str()])
+                .inc();
+
+            // Re-queue the partition back to pending state
+            self.storage
+                .requeue_backfill_partition(partition.id, &self.tenant_id)
+                .await
+                .map_err(|e| crate::Error::Internal(e.to_string()))?;
+
+            // Add a delay before the next poll picks this up
+            tokio::time::sleep(self.config.upstream_wait_delay).await;
+
+            return Ok(());
+        }
+
         let start = std::time::Instant::now();
 
         // Execute the asset for this partition with idempotency key
@@ -1168,6 +1213,56 @@ impl BackfillExecutor {
         upstream_partitions
     }
 
+    /// Check if all upstream partitions are ready (completed) for the given partition
+    ///
+    /// Returns true if all required upstream partitions have been completed in any backfill job,
+    /// or if there are no upstream dependencies. Returns false if any upstream partition is not completed.
+    #[instrument(skip(self, upstream_cache), fields(partition_key = %partition_key))]
+    async fn check_upstream_ready(
+        &self,
+        partition_key: &str,
+        partition_config: &Option<PartitionConfig>,
+        upstream_cache: Option<&JobDependencyCache>,
+    ) -> Result<bool> {
+        let cache = match upstream_cache {
+            Some(c) if !c.upstream_assets.is_empty() => c,
+            _ => {
+                // No upstream dependencies, partition is ready
+                debug!("No upstream dependencies, partition is ready");
+                return Ok(true);
+            }
+        };
+
+        // Resolve which upstream partitions are needed
+        let upstream_partitions =
+            self.resolve_upstream_partitions(partition_key, partition_config, cache);
+
+        // Check each upstream partition
+        for (asset_name, upstream_info) in &cache.upstream_assets {
+            if let Some(keys) = upstream_partitions.get(asset_name) {
+                for key in keys {
+                    let completed = self
+                        .storage
+                        .is_partition_completed(upstream_info.asset_id, key, &self.tenant_id)
+                        .await
+                        .map_err(|e| crate::Error::Internal(e.to_string()))?;
+
+                    if !completed {
+                        debug!(
+                            upstream_asset = %asset_name,
+                            upstream_partition = %key,
+                            "Upstream partition not yet completed"
+                        );
+                        return Ok(false);
+                    }
+                }
+            }
+        }
+
+        debug!("All upstream partitions are ready");
+        Ok(true)
+    }
+
     /// Wait for an execution to complete
     async fn wait_for_execution(&self, execution_id: Uuid, timeout: Duration) -> Result<bool> {
         let start = std::time::Instant::now();
@@ -1256,10 +1351,12 @@ mod tests {
             partition_delay: Duration::from_millis(200),
             stale_heartbeat_threshold: Duration::from_secs(300),
             partition_timeout: Duration::from_secs(600),
+            upstream_wait_delay: Duration::from_secs(60),
         };
         assert_eq!(config.max_concurrent_jobs, 5);
         assert_eq!(config.max_partition_retries, 5);
         assert_eq!(config.stale_heartbeat_threshold, Duration::from_secs(300));
+        assert_eq!(config.upstream_wait_delay, Duration::from_secs(60));
     }
 
     #[test]

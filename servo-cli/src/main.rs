@@ -105,6 +105,12 @@ enum Commands {
         #[command(subcommand)]
         action: PartitionAction,
     },
+
+    /// Inspect data quality checks and results
+    Quality {
+        #[command(subcommand)]
+        action: QualityAction,
+    },
 }
 
 #[derive(Subcommand)]
@@ -224,6 +230,43 @@ enum PartitionAction {
 
         /// Maximum number of partitions to show
         #[arg(long, default_value = "50")]
+        limit: usize,
+    },
+}
+
+#[derive(Subcommand)]
+enum QualityAction {
+    /// List quality checks for an asset
+    List {
+        /// Asset name
+        asset: String,
+
+        /// Tenant ID
+        #[arg(long, env = "TENANT_ID")]
+        tenant_id: String,
+    },
+
+    /// Show quality check results for an execution
+    Results {
+        /// Execution ID
+        execution_id: String,
+
+        /// Tenant ID
+        #[arg(long, env = "TENANT_ID")]
+        tenant_id: String,
+    },
+
+    /// Show check definition and execution history
+    Show {
+        /// Check ID
+        check_id: String,
+
+        /// Tenant ID
+        #[arg(long, env = "TENANT_ID")]
+        tenant_id: String,
+
+        /// Number of recent results to show
+        #[arg(long, default_value = "10")]
         limit: usize,
     },
 }
@@ -400,6 +443,28 @@ async fn main() -> anyhow::Result<()> {
                 } => {
                     commands::partition::list(&asset, &tenant_id, &database_url, Some(limit))
                         .await?;
+                }
+            }
+        }
+        Commands::Quality { action } => {
+            let database_url = resolve_db_url(cli.database_url.clone());
+
+            match action {
+                QualityAction::List { asset, tenant_id } => {
+                    commands::quality::list(&asset, &tenant_id, &database_url).await?;
+                }
+                QualityAction::Results {
+                    execution_id,
+                    tenant_id,
+                } => {
+                    commands::quality::results(&execution_id, &tenant_id, &database_url).await?;
+                }
+                QualityAction::Show {
+                    check_id,
+                    tenant_id,
+                    limit,
+                } => {
+                    commands::quality::show(&check_id, &tenant_id, limit, &database_url).await?;
                 }
             }
         }

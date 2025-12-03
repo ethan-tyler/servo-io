@@ -6,5 +6,6 @@ pub mod init;
 pub mod lineage;
 pub mod migrate;
 pub mod partition;
+pub mod quality;
 pub mod run;
 pub mod status;

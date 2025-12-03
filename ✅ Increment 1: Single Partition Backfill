@@ -1,0 +1,11 @@
+✅ Increment 1: Single Partition Backfill
+✅ Increment 2: Partition Range Backfill
+⏳ Increment 3: Backfill Execution (wires jobs to actually run)
+⏳ Increment 4: Progress Tracking & Resumption
+⏳ Increment 5: Upstream Propagation
+⏳ Increment 6: Observability
+
+⚠️ Outstanding items to reach full plan parity:
+Backfill upstream propagation (run upstream partitions first) and final observability polish.
+Partition runtime support (execute partition-aware scheduling/mappings beyond SDK metadata).
+Optional: refactor backfill progress API to drop clippy warnings; manage metric cardinality for per-job gauges if needed.
