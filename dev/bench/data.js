@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1764705205077,
+  "lastUpdate": 1764776138386,
   "repoUrl": "https://github.com/ethan-tyler/servo-io",
   "entries": {
     "Rust Benchmark": [
@@ -2188,6 +2188,282 @@ window.BENCHMARK_DATA = {
           {
             "name": "graph_operations/add_edge",
             "value": 83,
+            "range": "± 2",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "graph_operations/node_count/100",
+            "value": 0,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "graph_operations/node_count/1000",
+            "value": 0,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "graph_operations/node_count/10000",
+            "value": 0,
+            "range": "± 0",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "ethan@urbanskitech.com",
+            "name": "Ethan Urbanski",
+            "username": "ethan-tyler"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "1f4d8fc5f70166e0230a88bc8fa73f63281b6c2e",
+          "message": "feat: Phase 8 - Quality CLI & Partition Upstream Readiness (v0.8.0) (#51)\n\n* feat(partition): add partition runtime context support\n\nImplement partition-aware execution that passes partition information from\nbackfill operations through to Python compute functions.\n\nChanges:\n- Add PartitionExecutionContext struct in servo-core for runtime partition info\n- Extend TaskPayload with partition_context field in queue and worker\n- Add partition_context parameter to TaskEnqueuer trait\n- Add start_execution_with_partition() to ExecutionOrchestrator\n- Update BackfillExecutor to build and pass partition context\n- Update Worker to pass context to Python via SERVO_PARTITION_CONTEXT env var\n- Add Python SDK context module with get_partition_key(), get_partition_date()\n- Add comprehensive tests for Rust and Python implementations\n\nThe partition key now flows from backfill_partitions table through Cloud Tasks\nto the Python compute function, enabling partition-aware data processing.\n\n* test(partition): add partition context integration tests\n\nAdd 13 comprehensive integration tests for partition context propagation:\n\n- End-to-end serialization/deserialization tests\n- Backward compatibility tests for payloads without partition_context\n- JSON escaping security tests (quotes, newlines, unicode)\n- Base64 round-trip test (simulates Cloud Tasks encoding)\n- Environment variable format verification\n\nThese tests verify the contract between BackfillExecutor, Worker, and Python SDK.\n\n* style: fix formatting and lint issues\n\n- Apply rustfmt to all Rust files\n- Remove unused TYPE_CHECKING import from context.py\n- Remove unused pytest import from test_context.py\n\n* style: apply ruff formatting to test_context.py\n\n* feat(partition): add multi-dimensional partitions, upstream mappings, and CLI\n\nPhase 6 Complete - Advanced Partition Features:\n\n- Multi-dimensional partition parsing (6A)\n  - Parse JSON partition keys into dimensions HashMap\n  - Support for {\"date\": \"2024-01-15\", \"region\": \"us\"} format\n  - 6 unit tests for edge cases\n\n- Upstream partition mapping with job-level caching (6B)\n  - JobDependencyCache struct for O(1) lookups\n  - resolve_upstream_partitions using infer_mapping\n  - 833x performance improvement (5000 → 6 DB queries for 1000 partitions)\n\n- Python SDK convenience functions (6D)\n  - get_dimension(), get_upstream_partitions()\n  - get_all_dimensions(), is_multi_dimensional()\n  - 12 new tests in TestNewConvenienceFunctions\n\n- CLI partition commands (6E)\n  - servo partition status <asset> <key>\n  - servo partition deps <asset> <key>\n  - servo partition list <asset>\n\nTests: 82 tests passing (16 core + 15 mapping + 5 runtime + 12 CLI + 34 Python)\nPerformance: Job-level caching eliminates O(N×M) database calls\nBackward Compatible: Non-JSON keys, empty dimensions handled gracefully\n\n* feat(v0.8.0): quality CLI commands and partition upstream readiness\n\nPhase 8A - Quality CLI Commands:\n- Add `servo quality list <asset>` to show all checks for an asset\n- Add `servo quality results <execution-id>` to view check outcomes\n- Add `servo quality show <check-id>` for check details and history\n\nPhase 8C - Quality Documentation:\n- Add comprehensive docs/quality-checks.md user guide\n- Cover check types, CLI usage, PromQL queries, best practices\n\nPhase 6C - Partition Upstream Readiness:\n- Add is_partition_completed() storage method for dependency checking\n- Add requeue_backfill_partition() for re-queueing blocked partitions\n- Add check_upstream_ready() to verify upstream partitions complete\n- Add BACKFILL_PARTITION_REQUEUE_TOTAL metric for observability\n- Partitions automatically wait and re-queue when upstream not ready\n\n* style: fix rustfmt formatting",
+          "timestamp": "2025-12-03T10:24:20-05:00",
+          "tree_id": "34a732fece9d2c56c0e1e3c4719d266143e4deb5",
+          "url": "https://github.com/ethan-tyler/servo-io/commit/1f4d8fc5f70166e0230a88bc8fa73f63281b6c2e"
+        },
+        "date": 1764776137290,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "graph_construction/chain/10",
+            "value": 4793,
+            "range": "± 52",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "graph_construction/fan_out/10",
+            "value": 5721,
+            "range": "± 141",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "graph_construction/chain/100",
+            "value": 54054,
+            "range": "± 118",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "graph_construction/fan_out/100",
+            "value": 54565,
+            "range": "± 196",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "graph_construction/chain/1000",
+            "value": 539501,
+            "range": "± 1797",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "graph_construction/fan_out/1000",
+            "value": 540244,
+            "range": "± 6284",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "upstream_queries/chain_last_node/10",
+            "value": 39,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "upstream_queries/chain_mid_node/10",
+            "value": 38,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "upstream_queries/chain_last_node/100",
+            "value": 40,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "upstream_queries/chain_mid_node/100",
+            "value": 39,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "upstream_queries/chain_last_node/500",
+            "value": 39,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "upstream_queries/chain_mid_node/500",
+            "value": 40,
+            "range": "± 1",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "upstream_queries/single_upstream/10",
+            "value": 38,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "upstream_queries/single_upstream/100",
+            "value": 39,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "upstream_queries/single_upstream/500",
+            "value": 38,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "downstream_queries/fan_out/10",
+            "value": 134,
+            "range": "± 2",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "downstream_queries/fan_out/100",
+            "value": 469,
+            "range": "± 12",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "downstream_queries/fan_out/500",
+            "value": 1724,
+            "range": "± 5",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "downstream_queries/chain_first/10",
+            "value": 39,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "downstream_queries/chain_first/100",
+            "value": 40,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "downstream_queries/chain_first/500",
+            "value": 38,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "cycle_detection/chain_no_cycle/10",
+            "value": 153,
+            "range": "± 1",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "cycle_detection/chain_no_cycle/100",
+            "value": 1702,
+            "range": "± 14",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "cycle_detection/chain_no_cycle/500",
+            "value": 9508,
+            "range": "± 19",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "cycle_detection/chain_no_cycle/1000",
+            "value": 19379,
+            "range": "± 182",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "cycle_detection/diamond_layers/3",
+            "value": 425,
+            "range": "± 2",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "cycle_detection/diamond_layers/5",
+            "value": 918,
+            "range": "± 5",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "cycle_detection/diamond_layers/7",
+            "value": 1454,
+            "range": "± 40",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "impact_analysis/fan_out_source/10",
+            "value": 143,
+            "range": "± 5",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "impact_analysis/fan_out_source/100",
+            "value": 555,
+            "range": "± 1",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "impact_analysis/fan_out_source/500",
+            "value": 1870,
+            "range": "± 3",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "impact_analysis/chain_first/10",
+            "value": 48,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "impact_analysis/chain_first/100",
+            "value": 49,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "impact_analysis/chain_first/500",
+            "value": 48,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "impact_analysis/diamond_source/3",
+            "value": 144,
+            "range": "± 1",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "impact_analysis/diamond_source/5",
+            "value": 145,
+            "range": "± 1",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "impact_analysis/diamond_source/7",
+            "value": 146,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "graph_operations/add_single_node",
+            "value": 397,
+            "range": "± 3",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "graph_operations/add_edge",
+            "value": 84,
             "range": "± 2",
             "unit": "ns/iter"
           },
